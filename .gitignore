@@ -153,6 +153,10 @@ dmypy.json
 assets/flame/generic_model.pkl
 assets/universal_trained.pth
 assets/insight-face-v3.pt
+assets/face_normals
+assets/face_parsing
+assets/InsightFace
+assets/rvm
 **/my_configs/*
 /lightning_logs
 /experiments
