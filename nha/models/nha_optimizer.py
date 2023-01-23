@@ -838,8 +838,9 @@ class NHAOptimizer(pl.LightningModule):
 
     def _clip_expr_pose_mc(self, expr, pose, mouth_conditioning):
         if not self.training:
-            expr = expr.clip(min=self.expr_min, max=self.expr_max)
-            pose = pose.clip(min=self.pose_min, max=self.pose_max)
+            expr = expr.clip(min=self.expr_min, max=self.expr_max) if expr is not None else None
+            pose = pose.clip(min=self.pose_min, max=self.pose_max) if pose is not None else None
+
             mouth_conditioning = mouth_conditioning.clip(min=self.mouth_conditioning_min,
                                                          max=self.mouth_conditioning_max)
 
