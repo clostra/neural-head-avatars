@@ -879,14 +879,14 @@ class NHAOptimizer(pl.LightningModule):
         :param W:
         :return:
         """
-        # FILL SCENE
-        cameras = create_camera_objects(K, RT, (H, W), self.device)
-        flame_meshes = Meshes(verts=verts, faces=self._flame.faces[None].expand(len(verts), -1, -1))
 
         # RASTERIZING FRAGMENTS
         if rasterized_results is not None:
             fragments, screen_coords = rasterized_results
         else:
+            # FILL SCENE
+            cameras = create_camera_objects(K, RT, (H, W), self.device)
+            flame_meshes = Meshes(verts=verts, faces=self._flame.faces[None].expand(len(verts), -1, -1))
             fragments, screen_coords = self._rasterize(flame_meshes, cameras, (H, W))
         N, H, W, K, _ = fragments.bary_coords.shape
 
@@ -896,7 +896,7 @@ class NHAOptimizer(pl.LightningModule):
             face_semantics = torch.cat([face_semantics, self._blurred_vertex_labels], dim=1)
 
         C = face_semantics.shape[-1]
-        face_semantics = face_semantics.repeat(N, 1)[flame_meshes.faces_packed()]
+        face_semantics = face_semantics.repeat(N, 1)[self._flame.faces[None].expand(N, -1, -1).view(-1, 3)]
         pixel_face_semantics = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords,
                                                            face_semantics)  # N x H x W x K x C
 
