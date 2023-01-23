@@ -23,9 +23,11 @@ import sys
 sys.path.append('./deps')
 
 from nha.util.lbs import lbs, batch_rodrigues, vertices2landmarks
+import nha
 from nha.util.meshes import face_vertices, vertex_normals
 from nha.util.log import get_logger
 from nha.util.meshes import edge_subdivide
+import os
 from pytorch3d.io import load_obj, save_obj
 from collections import OrderedDict
 from scipy.spatial.transform import Rotation
@@ -38,12 +40,12 @@ import pickle
 import torch.nn.functional as F
 
 logger = get_logger(__name__)
-
-FLAME_MODEL_PATH = 'assets/flame/generic_model.pkl'
-FLAME_MESH_MOUTH_PATH = 'assets/flame/head_template_mesh_mouth.obj'
-FLAME_PARTS_MOUTH_PATH = 'assets/flame/FLAME_masks_mouth.pkl'
-FLAME_LMK_PATH = 'assets/flame/landmark_embedding_with_eyes.npy'
-FLAME_LOWER_NECK_FACES_PATH = 'assets/flame/lower_neck_face_idcs.npy'
+FLAME_ASSETS = os.path.join(os.path.abspath(os.path.dirname(os.path.dirname(nha.__file__))), 'assets/flame')
+FLAME_MODEL_PATH = os.path.join(FLAME_ASSETS, 'generic_model.pkl')
+FLAME_MESH_MOUTH_PATH = os.path.join(FLAME_ASSETS, 'head_template_mesh_mouth.obj')
+FLAME_PARTS_MOUTH_PATH = os.path.join(FLAME_ASSETS, 'FLAME_masks_mouth.pkl')
+FLAME_LMK_PATH = os.path.join(FLAME_ASSETS, 'landmark_embedding_with_eyes.npy')
+FLAME_LOWER_NECK_FACES_PATH = os.path.join(FLAME_ASSETS, 'lower_neck_face_idcs.npy')
 FLAME_N_SHAPE = 300
 FLAME_N_EXPR = 100
 
