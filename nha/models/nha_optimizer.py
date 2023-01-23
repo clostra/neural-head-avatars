@@ -1972,7 +1972,7 @@ class NHAOptimizer(pl.LightningModule):
 
         # TEXTURE optimizer
         params = [
-            {"params": list(self._texture.parameters()) + list(self._normal_encoder.parameters())},
+            {"params": list(self._texture.parameters()) + ([] if self._normal_encoder is None else list(self._normal_encoder.parameters()))},
             {"params": self._explFeatures.parameters()},
         ]
         tex_optim = torch.optim.Adam(params, lr=lrs["tex_lr"], weight_decay=lrs["texture_weight_decay"])
