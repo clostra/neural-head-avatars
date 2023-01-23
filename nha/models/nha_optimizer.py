@@ -718,7 +718,7 @@ class NHAOptimizer(pl.LightningModule):
         mask = fragments.pix_to_face != -1
         uv_coords = self._flame.face_uvcoords.repeat(N, 1, 1)
 
-        # shape: N x H x W x K x 2
+        # shape: N x H x W x K x V
         pixel_uv_coords = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, uv_coords)[..., :2]
         pixel_uv_ids = self._flame.face_uvmap.repeat(N)[fragments.pix_to_face]  # N x H x W x K
         pixel_uv_ids[~mask] = -1
@@ -766,7 +766,7 @@ class NHAOptimizer(pl.LightningModule):
         if getattr(self, "n_upsample", 1) != 1:
             normal_encoding = torchvision.transforms.functional.resize(normal_encoding, (H, W))
 
-        pixel_normal_encoding = normal_encoding.permute(0, 2, 3, 1)
+        pixel_normal_encoding = normal_encoding.permute(0, 2, 3, 1) # N x H x W x D
         pixel_normal_encoding = pixel_normal_encoding.unsqueeze(-2).expand(-1, -1, -1, faces_per_pix,
                                                                            -1)  # N x H x W x K x D
         pixel_normal_encoding_masked = pixel_normal_encoding[mask]
