@@ -176,12 +176,16 @@ class NHAOptimizer(pl.LightningModule):
         )
 
         # appearance
-        self._normal_encoder = NormalEncoder(
-            input_dim=3,
-            output_dim=self.hparams["d_normal_encoding"],
-            hidden_layers_feature_size=self.hparams["d_normal_encoding_hidden"],
-            hidden_layers=self.hparams["n_normal_encoding_hidden"],
-        )
+        if self.hparams['d_normal_encoding'] > 0:
+
+            self._normal_encoder = NormalEncoder(
+                input_dim=3,
+                output_dim=self.hparams["d_normal_encoding"],
+                hidden_layers_feature_size=self.hparams["d_normal_encoding_hidden"],
+                hidden_layers=self.hparams["n_normal_encoding_hidden"],
+            )
+        else:
+            self._normal_encoder = None
 
         teeth_res = 64
         face_res = 256
@@ -754,7 +758,10 @@ class NHAOptimizer(pl.LightningModule):
         if getattr(self, "n_upsample", 1) != 1:
             rendered_normals = torchvision.transforms.functional.resize(rendered_normals, (
                     torch.tensor(rendered_normals.shape[-2:]) / self.n_upsample).int().tolist())
-        normal_encoding = self._normal_encoder(rendered_normals)  # N x C x H x W
+        if self._normal_encoder is None:
+            normal_encoding = torch.zeros(N, self.hparams['d_normal_encoding'], H, W, device=self.device)
+        else:
+            normal_encoding = self._normal_encoder(rendered_normals)  # N x C x H x W
 
         if getattr(self, "n_upsample", 1) != 1:
             normal_encoding = torchvision.transforms.functional.resize(normal_encoding, (H, W))
