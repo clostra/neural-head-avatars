@@ -795,7 +795,9 @@ class FlameHead(nn.Module):
         if len(self._ignore_faces) != 0:
             filtered_vertices = vertices.permute(1, 0, 2)[self._vert_filter].permute(1, 0, 2)
 
-        ret_vals = [filtered_vertices]
+        ret_vals = {
+            'vertices': filtered_vertices,
+        }
 
         # compute landmarks if desired
         if return_landmarks is not None:
@@ -819,11 +821,11 @@ class FlameHead(nn.Module):
                 landmarks = vertices2landmarks(vertices, self._faces,
                                                lmk_faces_idx,
                                                lmk_bary_coords)
-
-            ret_vals.append(landmarks)
+            ret_vals['landmarks'] = landmarks
 
         if return_joints:
             ret_vals.append(J)
+            ret_vals['joints'] = J
 
         if return_mouth_conditioning:
             mouth_vert_pair_idcs = torch.tensor([[3506, 3531], [1670, 2906], [1738, 2882],
@@ -848,10 +850,7 @@ class FlameHead(nn.Module):
                                           dtype=mouth_conditioning.dtype)
             mouth_conditioning = torch.cat((mouth_conditioning, nose_condition), dim=1)
 
-            ret_vals.append(mouth_conditioning)
+            ret_vals['mouth_conditioning'] = mouth_conditioning
 
-        if len(ret_vals) > 1:
-            return ret_vals
-        else:
-            return ret_vals[0]
+        return ret_vals
 

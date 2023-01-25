@@ -461,11 +461,9 @@ class NHAOptimizer(pl.LightningModule):
             return_landmarks="static",
             return_mouth_conditioning=return_mouth_conditioning,
         )
-        if len(flame_results) == 3:
-            verts, lmks_static, mouth_conditioning = flame_results
-        else:
-            verts, lmks_static = flame_results
-            mouth_conditioning = None
+        verts, lmks_static = flame_results['vertices'], flame_results['landmarks']
+        if return_mouth_conditioning:
+            mouth_conditioning = flame_results['mouth_conditioning']
 
         if mouth_conditioning is None:
             return verts, lmks_static
