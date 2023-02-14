@@ -259,6 +259,9 @@ class FlameHead(nn.Module):
         for i, (key, verts) in enumerate(self.get_body_parts().items()):
             self.vert_labels[verts, i] = 1.
 
+
+        self.register_buffer("_face_neighbor_pairs", self._get_neighboring_face_pairs(self.faces))
+
     @property
     def v_template(self):
         return self._v_template_filtered if len(self._ignore_faces) != 0 else self._v_template
@@ -310,6 +313,10 @@ class FlameHead(nn.Module):
     def vertex_normals(self):
         return self._vertex_normals[self._vert_filter] if len(
             self._ignore_faces) != 0 else self._vertex_normals
+
+    @property
+    def face_neighbor_pairs(self):
+        return self._face_neighbor_pairs
 
     def _get_spatially_blurred_vert_labels(self, sigma=0.01):
         """
@@ -727,6 +734,79 @@ class FlameHead(nn.Module):
             # assert (r_min + (torch.tanh(res[name]) + 1) / 2 * diff) < 1e-7
         return res
 
+    def _compute_surface_area(self, vertices, faces):
+        """
+        Given vertices and faces of a mesh, compute the surface area of the mesh
+        Args:
+            vertices: (N, V, 3)
+            faces; (F, 3)
+        Returns:
+            surface_areas: (N)
+        """
+
+        face_vertices = vertices[:, faces] # (N, V, vertices_per_face, coordinates_per_vertex)
+        face_cross_results = torch.cross(face_vertices[:, :, 1] - face_vertices[:, :, 0], face_vertices[:, :, 2] - face_vertices[:, :, 0], dim=-1) # (N, F, 3)
+        face_surface_areas = torch.linalg.norm(face_cross_results, dim=-1) / 2 # (N, F)
+        surface_areas = face_surface_areas.sum(-1)
+        return surface_areas
+
+    def _get_neighboring_face_pairs(self, faces):
+        """
+        Returns pairs of face indices which share an edge
+        
+        1. Convert (num_faces, vertex_indices) to (num_faces, edge_indices)
+        2. Create array (max_edge_index, 2)
+        3. Iterate over face edges, use edge indices to add the face index to each respective edge
+        
+        Args:
+            faces: (F, 3)
+        Returns:
+            face_pairs: (E, 2) of face indices
+        """
+        vertex_num = faces.max() + 1
+        def undirected_edge_num(e):
+            i, j = e.min(1)[0], e.max(1)[0]
+            return i * vertex_num + j
+        e1 = undirected_edge_num(faces[:, [0, 1]])
+        e2 = undirected_edge_num(faces[:, [0, 2]])
+        e3 = undirected_edge_num(faces[:, [1, 2]])
+        faces_e = torch.stack((e1, e2, e3), dim=-1)
+
+        edges_unique, faces_e_remapped = torch.unique(faces_e, return_inverse=True)
+
+        edges_result = torch.zeros(len(edges_unique), 3, dtype=torch.long)
+        edges_saved = torch.zeros(len(edges_unique), dtype=torch.long)
+        faces_indices = torch.arange(len(faces))
+        for i in range(3):
+            edges_result[faces_e_remapped[:, i], torch.minimum(edges_saved[faces_e_remapped[:, i]], torch.tensor(2))] = faces_indices
+            edges_saved[faces_e_remapped[:, i]] += 1
+
+        # Remove edges with only 1 face (and broken ones with >=3 faces)
+        edges_result = edges_result[edges_saved == 2]
+        return edges_result[:, :2]
+
+    def get_curvature(self, verts):
+        """
+        Compute the curvature of the mesh
+        Average of differences between normals from neighboring faces
+
+        Args:
+            verts: (N, V, 3)
+
+        Returns:
+            curvatures: (N)
+        """
+        face_vertices = verts[:, self.faces] # (N, F, 3, 3)
+        face_cross_results = torch.cross(face_vertices[:, :, 1] - face_vertices[:, :, 0], face_vertices[:, :, 2] - face_vertices[:, :, 0], dim=-1) # (N, F, 3)
+        face_normals = face_cross_results / torch.linalg.norm(face_cross_results, dim=-1, keepdim=True) # (N, F, 3)
+        neighboring_normals = face_normals[:, self.face_neighbor_pairs] # (N, E, 2, 3)
+        neighboring_dots = (neighboring_normals[:, :, 0] * neighboring_normals[:, :, 1]).sum(-1) # (N, E)
+        return (1 - neighboring_dots).mean(-1)
+
+    def get_surface_area(self, verts):
+        return self._compute_surface_area(verts, self.faces)
+
+        
     def forward(self,
                 shape,
                 expr,
