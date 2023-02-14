@@ -63,7 +63,6 @@ CLASS_IDCS = dict(
     headwear=18,
 )
 
-
 class RealDataset(Dataset):
     def __init__(
         self,
@@ -136,7 +135,6 @@ class RealDataset(Dataset):
                 )
 
         self._views = []
-
         self._load(frame_filter)
         self._tracking_results = (
             dict(np.load(tracking_results_path))
@@ -182,68 +180,69 @@ class RealDataset(Dataset):
         else:
             return min(len(self._views), len(self._tracking_results["expr"]))
 
+    def _compute_eye_info(self, sample):
+        eye_info = {}
+        parsing = sample["parsing"][0].numpy()
+        left_eye_parsing = parsing == CLASS_IDCS["l_eye"]
+        right_eye_parsing = parsing == CLASS_IDCS["r_eye"]
+        lmks = sample["lmk2d"].numpy().astype(int)
+
+        right_eye = lmks[None, 36:42, :2]
+        left_eye = lmks[None, 42:48, :2]
+
+        left_eye_lmks = np.zeros(parsing.shape, dtype=np.uint8)
+        right_eye_lmks = np.zeros(parsing.shape, dtype=np.uint8)
+        cv2.fillPoly(right_eye_lmks, right_eye, 1)
+        cv2.fillPoly(left_eye_lmks, left_eye, 1)
+
+        is_good = []
+        for l, p in zip(
+            (left_eye_lmks, right_eye_lmks), (left_eye_parsing, right_eye_parsing)
+        ):
+            intersection = (l > 0) & (p > 0)
+            union = (l > 0) | (p > 0)
+            sum_union = np.sum(union)
+            if sum_union == 0:
+                is_good.append(True)
+                continue
+
+            iou = np.sum(intersection) / sum_union
+            if iou > 0.5:
+                is_good.append(True)
+
+        eye_info["valid_eyes"] = len(is_good) == 2
+
+        left_bb = (
+            get_mask_bbox(left_eye_parsing)
+            if np.sum(left_eye_parsing) > 0
+            else [0] * 4
+        )
+        right_bb = (
+            get_mask_bbox(right_eye_parsing)
+            if np.sum(right_eye_parsing) > 0
+            else [0] * 4
+        )
+        eye_info["eye_distance"] = [
+            left_bb[1] - left_bb[0],
+            right_bb[1] - right_bb[0],
+        ]
+        return eye_info
     def _get_eye_info(self, sample):
-        if not sample["frame"] in self._eye_info_cache:
-            eye_info = {}
-            parsing = sample["parsing"][0].numpy()
-            left_eye_parsing = parsing == CLASS_IDCS["l_eye"]
-            right_eye_parsing = parsing == CLASS_IDCS["r_eye"]
-            lmks = sample["lmk2d"].numpy().astype(int)
+        if not sample["frame_unique_key"] in self._eye_info_cache:
+            eye_info = self._compute_eye_info(sample)
+            self._eye_info_cache[sample["frame_unique_key"]] = eye_info
 
-            right_eye = lmks[None, 36:42, :2]
-            left_eye = lmks[None, 42:48, :2]
+        return self._eye_info_cache[sample["frame_unique_key"]]
 
-            left_eye_lmks = np.zeros(parsing.shape, dtype=np.uint8)
-            right_eye_lmks = np.zeros(parsing.shape, dtype=np.uint8)
-            cv2.fillPoly(right_eye_lmks, right_eye, 1)
-            cv2.fillPoly(left_eye_lmks, left_eye, 1)
-
-            is_good = []
-            for l, p in zip(
-                (left_eye_lmks, right_eye_lmks), (left_eye_parsing, right_eye_parsing)
-            ):
-                intersection = (l > 0) & (p > 0)
-                union = (l > 0) | (p > 0)
-                sum_union = np.sum(union)
-                if sum_union == 0:
-                    is_good.append(True)
-                    continue
-
-                iou = np.sum(intersection) / sum_union
-                if iou > 0.5:
-                    is_good.append(True)
-
-            eye_info["valid_eyes"] = len(is_good) == 2
-
-            left_bb = (
-                get_mask_bbox(left_eye_parsing)
-                if np.sum(left_eye_parsing) > 0
-                else [0] * 4
-            )
-            right_bb = (
-                get_mask_bbox(right_eye_parsing)
-                if np.sum(right_eye_parsing) > 0
-                else [0] * 4
-            )
-            eye_info["eye_distance"] = [
-                left_bb[1] - left_bb[0],
-                right_bb[1] - right_bb[0],
-            ]
-
-            self._eye_info_cache[sample["frame"]] = eye_info
-
-        return self._eye_info_cache[sample["frame"]]
-
-    def __getitem__(self, i):
-        """
-        Get i-th sample from the dataset.
-        """
-
-        view = self._views[i]
+    def frame_path_to_unique_key(self, frame_path):
+        return frame2id(frame_path.name)
+    
+    def get_sample(self, view, tracking_results=None, tracking_resolution=None):
         frame_path = view.parent
         sample = {}
 
         # subject and frame info
+        sample["frame_unique_key"] = self.frame_path_to_key(frame_path)
         sample["frame"] = frame2id(frame_path.name)
         subject = frame_path.parent.name
         sample["subject"] = subject
@@ -292,7 +291,7 @@ class RealDataset(Dataset):
 
         # flame
         if self._has_flame:
-            tr = self._tracking_results
+            tr = tracking_results
             j = np.where(tr["frame"] == sample["frame"])[0][0]
             sample["flame_shape"] = torch.from_numpy(tr["shape"]).float()
             sample["flame_expr"] = torch.from_numpy(tr["expr"][j]).float()
@@ -313,7 +312,7 @@ class RealDataset(Dataset):
         if self._has_camera:
             tr = self._tracking_results
 
-            track_h, track_w = self._tracking_resolution
+            track_h, track_w = tracking_resolution
             img_h, img_w = sample["rgb"].shape[-2], sample["rgb"].shape[-1]
 
             fx_scale = max(track_h, track_w) * img_w / track_w
@@ -353,6 +352,14 @@ class RealDataset(Dataset):
 
         return sample
 
+    def __getitem__(self, i):
+        """
+        Get i-th sample from the dataset.
+        """
+
+        view = self._views[i]
+        return self.get_sample(view, self._tracking_results, self._tracking_resolution)
+
     @property
     def frame_list(self):
         frames = []
@@ -367,6 +374,126 @@ class RealDataset(Dataset):
             views.append(view.name)
         return views
 
+class MultipleVideosDataset(RealDataset):
+    def __init__(
+        self,
+        path,
+        frame_paths=None,
+        video_to_id=None,
+        tracking_results_filename=None,
+        load_uv=False,
+        load_normal=False,
+        load_lmk=False,
+        lmk_dynamic=False,
+        load_seg=False,
+        load_parsing=False,
+        load_bbx=False,
+        load_flame=False,
+        load_camera=False,
+        load_light=False,
+    ):
+        """
+        :param path: object of type Path from pathlib or str pointing
+                     to the dataset root, which has the following
+                     structure
+                     -root/
+                        |----subject1/
+                        |        |----frame1/
+                        |        ...
+                        |----subject2/
+                        ...
+        :param per_view: If true a single view is considered a sample.
+                         Otherwise, all views of a frame are considered
+                         a sample.
+        :param frame_filter: None or list which contains the frame
+                             numbers to be considered
+        :param load_uv: not implemented
+        :param load_lmk: indicates if lmks shall be loaded
+        :param lmk_dynamic: False: dynamic keypoints from face-alignment, True: static keypoints from openpose
+        :param load_seg: load segmenation?
+        :param load_bbx: not implemented
+        :param load_flame: not implemented
+        :param load_camera: indicates if camera parameters shall be loaded
+        """
+        Dataset.__init__(self)
+        self._path = Path(path)
+        self._has_lmks = load_lmk
+        self._has_flame = load_flame
+        self._has_camera = load_camera
+        self._lmks_dynamic = lmk_dynamic
+        self._has_camera = load_camera
+        self._has_seg = load_seg
+        self._has_light = load_light
+        self._has_normal = load_normal
+        self._has_parsing = load_parsing
+
+        self._eye_info_cache = {}
+
+        # sanity checks for not implemented parts
+        if load_uv:
+            raise NotImplementedError("Real datasets don't contain uv-maps")
+        if load_bbx:
+            raise NotImplementedError("Real datasets don't contain bounding boxes")
+        if load_flame:
+            if tracking_results_filename is None:
+                raise ValueError(
+                    "In order to load flame parameters, 'tracking_results_filename' must be provided."
+                )
+        if load_camera:
+            if tracking_results_filename is None:
+                raise ValueError(
+                    "In order to load camera parameters, 'tracking_results_filename' must be provided."
+                )
+
+        self._views = []
+        self._video_paths = []
+        self._video_to_id = {}
+        self._load(frame_paths, video_to_id)
+        self._tracking_results = [
+            dict(np.load(str(video_path / tracking_results_filename)))
+            for video_path in self._video_paths
+        ]
+        self._tracking_resolution = [
+            tr["image_size"] for tr in self._tracking_results
+        ]
+
+    def _load(self, frame_paths, video_to_id):
+        if frame_paths is None and video_to_id is None:
+            self._video_paths = list(self._path.iterdir())
+            self._video_paths = sorted(self._video_paths, key=lambda x: x.name)
+            frame_paths = []
+            for video_path in self.video_paths:
+                frame_paths += list(video_path.glob("frame_*"))
+            self._video_to_id = {video_path.name: i for i, video_path in enumerate(self._video_paths)}
+        else:
+            assert frame_paths is None or video_to_id is None, "Both should be defined"
+            self._video_paths = [None for _ in range(len(video_to_id))]
+            for video_name, i in video_to_id.items():
+                self._video_paths[i] = self._path / video_name
+        self._views = [frame_path / "image_0000.png" for frame_path in frame_paths]
+
+    def __len__(self):
+        return len(self._views)
+
+    def frame_path_to_unique_key(self, frame_path):
+        return (frame_path.parent.name, frame2id(frame_path.name))
+    def __getitem__(self, idx):
+        view = self._views[idx]
+        video_id = self._video_to_id[view.parent.parent.name]
+        tracking_results = self._tracking_results[video_id]
+        tracking_resolution = self._tracking_resolution[video_id]
+        sample = self.get_sample(view, tracking_results, tracking_resolution)
+
+        sample["video_id"] = video_id
+        return sample
+
+    @property
+    def video_to_id(self):
+        return self._video_to_id
+
+    @property
+    def video_paths(self):
+        return self._video_paths
 
 class RealDataModule(pl.LightningDataModule):
     def __init__(
@@ -499,6 +626,170 @@ class RealDataModule(pl.LightningDataModule):
         parser.add_argument("--validation_batch_size", type=int, default=8, nargs=3)
         parser.add_argument("--tracking_results_path", type=Path, default=None)
         parser.add_argument("--tracking_resolution", type=int, default=None, nargs=2)
+        parser.add_argument("--load_uv", action="store_true")
+        parser.add_argument("--load_normal", action="store_true")
+        parser.add_argument("--load_flame", action="store_true")
+        parser.add_argument("--load_bbx", action="store_true")
+        parser.add_argument("--load_lmk", action="store_true")
+        parser.add_argument("--lmk_dynamic", action="store_true")
+        parser.add_argument("--load_seg", action="store_true")
+        parser.add_argument("--load_camera", action="store_true")
+        parser.add_argument("--load_light", action="store_true")
+        parser.add_argument("--load_parsing", action="store_true")
+
+        return parser
+
+    def train_dataloader(self, batch_size):
+        return DataLoader(
+            self._train_set,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=self._workers,
+        )
+
+    def val_dataloader(self, batch_size):
+        return DataLoader(
+            self._val_set,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=self._workers,
+        )
+
+    def prepare_data(self, *args, **kwargs):
+        pass
+
+class MultipleVideosDataModule(pl.LightningModule):
+    def __init__(
+        self,
+        data_path,
+        train_size=0.8,
+        tracking_results_filename=None,
+        train_batch_size=64,
+        validation_batch_size=64,
+        data_worker=8,
+        load_bbx=False,
+        load_seg=False,
+        load_flame=False,
+        load_lmk=False,
+        lmk_dynamic=False,
+        load_uv=False,
+        load_normal=False,
+        load_camera=False,
+        load_light=False,
+        load_parsing=False,
+        **kwargs,
+    ):
+        """
+        Encapsulates train and validation splits of the real dataset and their dataloaders
+        :param data_path: path to real dataset
+        :param split_config: json file that specifies which frames to use for training and which for testing.
+                            If None, all available frames are used for training and validation
+        :param train_batch_size:
+        :param validation_batch_size:
+        :param loader_threads: number of workers to be spawned by the dataloaders
+        :param load_cameras:
+        :param load_flame:
+        :param load_lmk:
+        :param load_uv:
+        :param load_normal:
+        """
+        super().__init__()
+        self._path = Path(data_path)
+        self._train_batch = train_batch_size
+        self._val_batch = validation_batch_size
+        self._workers = data_worker
+        self._tracking_results_filename = tracking_results_filename
+        self._train_set = None
+        self._val_set = None
+        self._video_to_id = None
+        self._video_paths = None
+        self._train_size = train_size
+        self._load_components = dict(
+            load_bbx=load_bbx,
+            load_seg=load_seg,
+            load_flame=load_flame,
+            load_lmk=load_lmk,
+            lmk_dynamic=lmk_dynamic,
+            load_uv=load_uv,
+            load_camera=load_camera,
+            load_normal=load_normal,
+            load_light=load_light,
+            load_parsing=load_parsing,
+        )
+
+    def setup(self, stage=None):
+        self._init_videos()
+        train_split, val_split = self._make_splits()
+
+        self._train_set = MultipleVideosDataset(
+            self._path,
+            frame_paths=train_split,
+            video_to_id=self._video_to_id,
+            tracking_results_filename=self._tracking_results_filename,
+            **self._load_components,
+        )
+
+        logger.info(
+            f"Collected real training dataset containing: "
+            f"{len(self._train_set)} samples."
+        )
+
+        self._val_set = MultipleVideosDataset(
+            self._path,
+            frame_paths=val_split,
+            video_to_id=self._video_to_id,
+            tracking_results_filename=self._tracking_results_filename,
+            **self._load_components,
+        )
+
+        logger.info(
+            f"Collected real validation dataset containing: "
+            f"{len(self._val_set)} samples."
+        )
+
+    @property
+    def video_to_id(self):
+        return self._video_to_id
+    @property
+    def video_paths(self):
+        return self._video_paths
+
+    def get_frames(self, video_name):
+        return sorted(list((self._path / video_name).glob("frame_*")))
+
+    def _init_videos(self):
+        self._video_paths = list(self._path.iterdir())
+        self._video_to_id = {video_path.name: i for i, video_path in enumerate(self._video_paths)}
+
+    def _make_splits(self):
+        """
+        Reads the train/val split information from the split file
+        :param split_config:
+        :return:
+        """
+        train_frame_paths = []
+        val_frame_paths = []
+        for video_path in self._video_paths:
+            frames = self.get_frames(video_path.name)
+            train_size = int(len(frames) * self._train_size)
+            train_frame_paths += frames[:train_size]
+            val_frame_paths += frames[train_size:]
+        return train_frame_paths, val_frame_paths
+
+    @classmethod
+    def add_argparse_args(cls, parser):
+        """
+        Adds dataset specific parameters to parser
+        :param parser:
+        :return:
+        """
+        parser = argparse.ArgumentParser(parents=[parser], add_help=False)
+        parser.add_argument("--data_path", type=str, required=True)
+        parser.add_argument("--data_worker", type=int, default=8)
+        parser.add_argument("--train_size", type=float, required=False, default=0.8)
+        parser.add_argument("--train_batch_size", type=int, default=8, nargs=3)
+        parser.add_argument("--validation_batch_size", type=int, default=8, nargs=3)
+        parser.add_argument("--tracking_results_filename", type=str, default=None)
         parser.add_argument("--load_uv", action="store_true")
         parser.add_argument("--load_normal", action="store_true")
         parser.add_argument("--load_flame", action="store_true")
