@@ -27,19 +27,23 @@ from fdlite import (
     iris_roi_from_face_landmarks,
 )
 
-sys.path.append("deps")
+this_file = Path(__file__)
+nha_repo_path = this_file.parent.parent
+sys.path.append(str(nha_repo_path / "deps"))
 
 # include dependencies for face normal detection
-sys.path.append("deps/face_normals/resnet_unet")
+sys.path.append(str(nha_repo_path / "deps/face_normals/resnet_unet"))
 from face_normals.resnet_unet import ResNetUNet
 
 # remove that path and delete the resnet module entry
 # because face_parsing has a module with the same name
-sys.path.remove("deps/face_normals/resnet_unet")
-sys.modules.pop('resnet')
+sys.path.remove(str(nha_repo_path / "deps/face_normals/resnet_unet"))
+if 'resnet' in sys.modules:
+    sys.modules.pop('resnet')
 
 # include dependency for face parsing annotation
-sys.path.append("deps/face_parsing")
+sys.path.append(str(nha_repo_path / "deps/face_parsing"))
+sys.path.append(str(nha_repo_path / "deps/face_normals/resnet_unet"))
 from face_parsing.model import BiSeNet
 
 # include dependency for segmentation
@@ -49,13 +53,50 @@ from RobustVideoMatting.model import MattingNetwork
 from nha.data.real import RealDataModule, id2frame, id2view
 
 # set paths to model weights
-PARSING_MODEL_PATH = "./assets/face_parsing/model.pth"
-NORMAL_MODEL_PATH = "./assets/face_normals/model.pth"
-SEG_MODEL_PATH = "./assets/rvm/rvm_mobilenetv3.pth"
+PARSING_MODEL_PATH = str(nha_repo_path / "assets/face_parsing/model.pth")
+NORMAL_MODEL_PATH = str(nha_repo_path / "assets/face_normals/model.pth")
+SEG_MODEL_PATH = str(nha_repo_path / "assets/rvm/rvm_mobilenetv3.pth")
 
 # setup logger
 logger = get_logger("nha", root=True)
 
+def run_batchwise(fn, data, batch_size: int, dim: int=0, **kwargs):
+    """
+    Runs a function in a batchwise fashion along the `dim` dimension to prevent OOM
+    Params:
+        - fn: the function to run
+        - data: a dict of tensors which should be split batchwise
+    """
+    # Filter out None data types
+    keys, values = zip(*data.items())
+    assert batch_size >= 1, f"Wrong batch_size: {batch_size}"
+    assert len(set([v.shape[dim] for v in values])) == 1, \
+        f"Tensors must be of the same size along dimension {dim}. Got {[v.shape[dim] for v in values]}"
+
+    # Early exit
+    if values[0].shape[dim] <= batch_size:
+        return fn(**data, **kwargs)
+
+    results = []
+    num_runs = (values[0].shape[dim] + batch_size - 1) // batch_size
+
+
+    for i in range(num_runs):
+        batch_slice = [slice(None) for _ in range(values[0].ndim)]
+        batch_slice[dim] = slice(i * batch_size, (i+1) * batch_size)
+        curr_data = {k: d[tuple(batch_slice)] for k, d in data.items()}
+        results.append(fn(**curr_data, **kwargs))
+
+    if isinstance(results[0], torch.Tensor):
+        return torch.cat(results, dim=dim)
+    elif isinstance(results[0], list) or isinstance(results[0], tuple):
+        return [torch.cat([r[i] for r in results], dim=dim) for i in range(len(results[0]))]
+    elif isinstance(results[0], dict):
+        return {k: torch.cat([r[k] for r in results], dim=dim) for k in results[0].keys()}
+    elif results[0] is None:
+        return None
+    else:
+        raise NotImplementedError(f"Cannot handle {type(results[0])} result types.")
 
 class Video2DatasetConverter:
 
@@ -94,6 +135,7 @@ class Video2DatasetConverter:
 
         assert self._video_path.exists()
         self._data_path.mkdir(parents=True, exist_ok=True)
+        self._ignore_frames = set()
 
     def extract_frames(self):
         """
@@ -236,7 +278,87 @@ class Video2DatasetConverter:
         crop_box = self._get_aggregate_bbox(bboxes, height, width)
         return crop_box
 
-    def apply_transforms(self, crop_seg=True, scale=True, pad_to_square=True):
+    def _load_frames(self, frames):
+        imgs = []
+        for frame in frames:
+            img = ttf.to_tensor(Image.open(str(frame)))
+            imgs.append(img)
+        try:
+            imgs = torch.stack(imgs, dim=0)
+        except RuntimeError as e:
+            raise RuntimeError("Frames from one video must have the same shape: " + str(e))
+        return imgs  # (N, 3, H, W)
+
+
+    def _scale_images(self, imgs):
+        x_dim, y_dim = imgs.shape[-1], imgs.shape[-2]
+        if x_dim > y_dim:
+            width = self._scale
+            height = int(np.round(y_dim * self._scale / x_dim))
+        else:
+            height = self._scale
+            width = int(np.round(x_dim * self._scale / y_dim))
+
+        # store the target resolution
+        self._transforms["scale"] = {
+            "w_in": x_dim,
+            "w_out": width,
+            "h_in": y_dim,
+            "h_out": height,
+        }
+        target_res = (height, width)
+
+        imgs = ttf.resize(
+            imgs, target_res, InterpolationMode.BILINEAR, antialias=True
+        )
+        return imgs
+
+    def _apply_transforms_images(self, imgs, crop_seg=True, scale=True, pad_to_square=True):
+        if crop_seg:
+            raise NotImplementedError("Batching cropping to segmentation not implemented")
+        if pad_to_square:
+            raise NotImplementedError("Batching padding to square not implemented")
+
+        if scale:
+            imgs = self._scale_images(imgs)
+
+        return imgs
+        
+    def apply_transforms_batched(self, crop_seg=True, scale=True, pad_to_square=True, batch_size=64):
+        """
+        Optionally, performs some transformations on the frames:
+        1.) Crop frames around head segmentation. This ensures tight
+        bounding boxes around the head
+        2.) Pad to square
+        3.) Resize
+        """
+
+        frames = self._get_frame_list()
+
+        def process_batch(frames):
+            imgs = self._load_frames(frames)
+            imgs = self._apply_transforms_images(
+                imgs, 
+                crop_seg=crop_seg, scale=scale, pad_to_square=pad_to_square
+            )
+            for frame, img in zip(frames, imgs):
+                if self._keep_original_frames:
+                    original_filename = (
+                        frame.parent / Video2DatasetConverter.ORIGINAL_IMAGE_FILE_NAME
+                    )
+                    frame.rename(original_filename)
+                img = ttf.to_pil_image(img)
+                img.save(frame)
+
+        run_batchwise(
+            fn=process_batch,
+            data={'frames': np.array(frames)},
+            batch_size=batch_size,
+            dim=0
+        )
+
+
+    def apply_transforms(self, crop_seg=True, scale=True, pad_to_square=True, log=True):
         """
         Optionally, performs some transformations on the frames:
         1.) Crop frames around head segmentation. This ensures tight
@@ -252,7 +374,8 @@ class Video2DatasetConverter:
         # transform all images
         for frame in self._get_frame_list():
             frame_id = int(frame.parent.name.split("_")[-1])
-            logger.info(f"Transforming frame: {frame_id}")
+            if log:
+                logger.info(f"Transforming frame: {frame_id}")
 
             # if the original image files shall be kept, define new filename
             if self._keep_original_frames:
@@ -313,10 +436,10 @@ class Video2DatasetConverter:
                         "h_out": height,
                     }
                     target_res = (height, width)
-
-                img = ttf.resize(
-                    img, target_res, InterpolationMode.BILINEAR, antialias=True
-                )
+                if (y_dim, x_dim) != target_res:
+                    img = ttf.resize(
+                        img, target_res, InterpolationMode.BILINEAR, antialias=True
+                    )
 
             img = ttf.to_pil_image(img)
             img.save(frame)
@@ -433,23 +556,27 @@ class Video2DatasetConverter:
             face_detections = detect_faces(img)
             if len(face_detections) != 1:
                 logger.error("Empty iris landmarks")
+                self._ignore_frames.add(frame_id)
             else:
                 for face_detection in face_detections:
                     try:
                         face_roi = face_detection_to_roi(face_detection, img_size)
                     except ValueError:
                         logger.error("Empty iris landmarks")
+                        self._ignore_frames.add(frame_id)
                         break
 
                     face_landmarks = detect_face_landmarks(img, face_roi)
                     if len(face_landmarks) == 0:
                         logger.error("Empty iris landmarks")
+                        self._ignore_frames.add(frame_id)
                         break
 
                     iris_rois = iris_roi_from_face_landmarks(face_landmarks, img_size)
 
                     if len(iris_rois) != 2:
                         logger.error("Empty iris landmarks")
+                        self._ignore_frames.add(frame_id)
                         break
 
                     lmks = []
@@ -460,6 +587,7 @@ class Video2DatasetConverter:
                             ]
                         except np.linalg.LinAlgError:
                             logger.error("Failed to get iris landmarks")
+                            self._ignore_frames.add(frame_id)
                             break
 
                         for landmark in iris_landmarks:
@@ -499,6 +627,8 @@ class Video2DatasetConverter:
 
             # check conistency of iris landmarks and facial keypoints
             for k in lmks_face.keys():
+                if k in self._ignore_frames:
+                    continue
 
                 lmks_face_i = lmks_face[k].flatten().tolist()
                 lmks_iris_i = lmks_iris[k]
@@ -519,6 +649,8 @@ class Video2DatasetConverter:
 
         # construct final json
         for k in lmks_face.keys():
+            if k in self._ignore_frames:
+                continue
             lmk_dict = {}
             lmk_dict["bounding_box"] = bboxes_faces[k].tolist()
             lmk_dict["face_keypoints_2d"] = lmks_face[k].flatten().tolist()
@@ -535,6 +667,12 @@ class Video2DatasetConverter:
 
             with open(out_path, "w") as f:
                 json.dump(json_dict, f)
+        out_path = (
+            self._data_path
+            / "ignore_frames.json"
+        )
+        with open(out_path, "w") as f:
+            json.dump({'ignore_frames': list(self._ignore_frames)}, f)
 
     def _correct_eye_labels(self, parsing, lmks):
         """
@@ -762,6 +900,8 @@ class Video2DatasetConverter:
 
         for frame in self._get_frame_list():
             frame_id = int(frame.parent.name.split("_")[-1])
+            if frame_id in self._ignore_frames:
+                continue
             logger.info(f"Annotate normals for frame: {frame_id}")
 
             img = Image.open(frame)
