@@ -118,6 +118,8 @@ class NHAOptimizer(pl.LightningModule):
             dict(name_or_flags="--w_semantic_eye", default=[1e-1] * 3, type=float, nargs=3),
             dict(name_or_flags="--w_semantic_mouth", default=[1e-1] * 3, type=float, nargs=3),
             dict(name_or_flags="--w_semantic_hair", type=json.loads, nargs="*"),
+            dict(name_or_flags="--w_surface_area", default=[1e-2] * 3, type=float, nargs=3),
+            dict(name_or_flags="--w_curvature", default=[1e-2] * 3, type=float, nargs=3),
         ]
         for f in combi_args:
             parser.add_argument(f.pop("name_or_flags"), **f)
@@ -453,7 +455,6 @@ class NHAOptimizer(pl.LightningModule):
             - lmk: N x 68 x 3
             - (optional) mouth_conditioning: N x 13
         """
-
         flame_results = self._flame(
             **flame_params,
             zero_centered=True,
@@ -465,7 +466,7 @@ class NHAOptimizer(pl.LightningModule):
         if return_mouth_conditioning:
             mouth_conditioning = flame_results['mouth_conditioning']
 
-        if mouth_conditioning is None:
+        if not return_mouth_conditioning:
             return verts, lmks_static
         else:
             return verts, lmks_static, mouth_conditioning
@@ -895,7 +896,7 @@ class NHAOptimizer(pl.LightningModule):
             face_semantics = torch.cat([face_semantics, self._blurred_vertex_labels], dim=1)
 
         C = face_semantics.shape[-1]
-        face_semantics = face_semantics.repeat(N, 1)[self._flame.faces[None].expand(N, -1, -1).view(-1, 3)]
+        face_semantics = face_semantics.repeat(N, 1)[self._flame.faces[None].expand(N, -1, -1).reshape(-1, 3)]
         pixel_face_semantics = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords,
                                                            face_semantics)  # N x H x W x K x C
 
@@ -1434,6 +1435,10 @@ class NHAOptimizer(pl.LightningModule):
         edge_loss = self._compute_edge_length_loss(offsets_verts)
         shape_reg, expr_reg, pose_reg = self._compute_flame_reg_losses(batch)
 
+        surface_area_reg = self._flame.get_surface_area(offsets_verts).mean()
+
+        curvature_reg = self._flame.get_curvature(offsets_verts).mean()
+
         loss_weights = self.get_current_lrs_n_lossweights()
 
         total_loss = loss_weights["w_norm"] * normal_loss + loss_weights["w_lap"] * lap_loss + \
@@ -1442,7 +1447,8 @@ class NHAOptimizer(pl.LightningModule):
                      loss_weights["w_shape_reg"] * shape_reg + loss_weights["w_expr_reg"] * expr_reg + \
                      loss_weights["w_pose_reg"] * pose_reg + loss_weights["w_surface_reg"] * surface_reg + \
                      loss_weights["w_semantic_ear"] * sem_ear + loss_weights["w_semantic_mouth"] * sem_mouth + \
-                     loss_weights["w_semantic_hair"] * sem_hair + loss_weights["w_semantic_eye"] * sem_eye
+                     loss_weights["w_semantic_hair"] * sem_hair + loss_weights["w_semantic_eye"] * sem_eye + \
+                     loss_weights["w_surface_area"] * surface_area_reg + loss_weights["w_curvature"] * curvature_reg
 
         log_dict = {
             "lap_loss": lap_loss,
@@ -1942,6 +1948,8 @@ class NHAOptimizer(pl.LightningModule):
             w_shape_reg=self.hparams["w_shape_reg"][i],
             w_expr_reg=self.hparams["w_expr_reg"][i],
             w_pose_reg=self.hparams["w_pose_reg"][i],
+            w_surface_area=self.hparams["w_surface_area"][i],
+            w_curvature=self.hparams["w_curvature"][i],
             texture_weight_decay=self.hparams["texture_weight_decay"][i],
             flame_lr=self.hparams["flame_lr"][i],
             offset_lr=self.hparams["offset_lr"][i],
