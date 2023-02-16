@@ -242,7 +242,7 @@ class RealDataset(Dataset):
         sample = {}
 
         # subject and frame info
-        sample["frame_unique_key"] = self.frame_path_to_key(frame_path)
+        sample["frame_unique_key"] = self.frame_path_to_unique_key(frame_path)
         sample["frame"] = frame2id(frame_path.name)
         subject = frame_path.parent.name
         sample["subject"] = subject
