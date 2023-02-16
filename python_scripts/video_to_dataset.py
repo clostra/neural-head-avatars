@@ -133,6 +133,7 @@ class Video2DatasetConverter:
         self._keep_original_frames = keep_original_frames
         self._no_iris_landmarks = [-1] * 6
         self._transforms = {}
+        self.fa = None
 
         assert self._video_path.exists()
         self._data_path.mkdir(parents=True, exist_ok=True)
@@ -210,6 +211,13 @@ class Video2DatasetConverter:
         with open(path, "w") as f:
             json.dump(self._transforms, f)
 
+    def _pad_bbox(self, bbox, width, height, padding):
+        l, u, r, b = bbox
+        l = int(max(0, l - padding))
+        r = int(min(width - 1, r + padding))
+        u = int(max(0, u - padding))
+        b = int(min(height - 1, b + padding))
+        return l, u, r, b
     def _get_aggregate_bbox(self, bboxes, height, width, padding=20):
         """
         Computes the maximum bounding box. Around all candidates
@@ -244,14 +252,9 @@ class Video2DatasetConverter:
         else:
             l, u, r, b = min_l, min_u, max_r, max_b
 
-        l = int(max(0, l - padding))
-        r = int(min(width - 1, r + padding))
-        u = int(max(0, u - padding))
-        b = int(min(height - 1, b + padding))
+        bbox = (l, u, r, b)
 
-        assert 0 <= l < r and r < width and 0 <= u < b and b < height
-
-        return l, u, r, b
+        return self._pad_bbox(bbox, width, height, padding)
 
     def _crop_box_around_seg(self):
         bboxes = []
@@ -358,8 +361,18 @@ class Video2DatasetConverter:
             dim=0
         )
 
+    def _apply_crop_to_bbox(self, bbox, crop_bbox):
+        """
+        Modify a bounding box inplace after the cropping transformation
+        ltrb
+        """
+        width, height = crop_bbox[2] - crop_bbox[0], crop_bbox[3] - crop_bbox[1]
+        bbox[0] = max(0, bbox[0] - crop_bbox[0])
+        bbox[1] = max(0, bbox[1] - crop_bbox[1])
+        bbox[2] = min(width, bbox[2] - crop_bbox[0])
+        bbox[3] = min(height, bbox[3] - crop_bbox[1])
 
-    def apply_transforms(self, crop_seg=True, scale=True, pad_to_square=True, log=True):
+    def apply_transforms(self, crop_face=True, scale=True, pad_to_square=True, log=True):
         """
         Optionally, performs some transformations on the frames:
         1.) Crop frames around head segmentation. This ensures tight
@@ -368,10 +381,10 @@ class Video2DatasetConverter:
         3.) Resize
         """
 
-        crop_box = None
         target_res = None
         pad_dims = None
-
+        if crop_face:
+            bboxes = self._annotate_face_bboxes()
         # transform all images
         for frame in self._get_frame_list():
             frame_id = int(frame.parent.name.split("_")[-1])
@@ -391,17 +404,10 @@ class Video2DatasetConverter:
             x_dim, y_dim = img.shape[-1], img.shape[-2]
 
             # crop
-            if crop_seg:
-                if crop_box is None:
-                    crop_box = self._crop_box_around_seg()
-                    l, t, r, b = crop_box
-                    self._transforms["crop"] = {
-                        "x0": l,
-                        "y0": t,
-                        "w": r - l,
-                        "h": b - t,
-                    }
-
+            if crop_face:
+                crop_box = bboxes[frame_id][:4]
+                crop_box = self._pad_bbox(crop_box, x_dim, y_dim, 20)
+                # TODO: apply crop to bbox
                 l, t, r, b = crop_box
                 img = ttf.crop(img, t, l, b - t, r - l)
                 x_dim, y_dim = img.shape[-1], img.shape[-2]
@@ -495,39 +501,91 @@ class Video2DatasetConverter:
                 img = img.resize(target_res, Image.BICUBIC)
                 img.save(path)
 
+    def _get_face_alignment(self):
+        if self.fa is None:
+            self.fa = face_alignment.FaceAlignment(
+                face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
+            )
+        return self.fa
+
+    def _get_bbox_centers(self, bboxes):
+        return np.stack(
+            ((bboxes[:, 2] + bboxes[:, 0])/2, (bboxes[:, 3] + bboxes[:, 1])/2),
+            axis=-1
+        )
+
+    def _select_bbox_path(self, bbox_lists):
+        """
+        Find an optimal path through bounding boxes in each frame
+        Returns a list of selected bounding boxes
+        """
+        for i, _ in enumerate(bbox_lists[0]):
+            # Variables to store data about the previous frame, "cur" refers to current
+            cur_bbox_idx = i
+            cur_path = [cur_bbox_idx]
+            cur_bbox_centers = self._get_bbox_centers(np.array(bbox_lists[0]))
+
+            for bboxes in bbox_lists[1:]:
+                # Get centers of bounding BBoxes from the next frame
+                bbox_centers = self._get_bbox_centers(np.array(bboxes))
+                # Get closest BBox from the next frame
+                closest_bbox_idx = np.linalg.norm(bbox_centers - cur_bbox_centers[cur_bbox_idx], axis=-1).argmin()
+                closest_bbox_center = bbox_centers[closest_bbox_idx]
+
+                # Verify that the current last BBox is the closest one to the closest from the next
+                closest_cur_bbox_idx = np.linalg.norm(cur_bbox_centers - closest_bbox_center, axis=-1).argmin()
+                if closest_cur_bbox_idx == cur_bbox_idx:
+                    cur_path.append(closest_bbox_idx)
+                    cur_bbox_idx = closest_bbox_idx
+                    cur_bbox_centers = bbox_centers
+            if len(cur_path) == len(bbox_lists):
+                return [bbox_list[cur_path[i]] for i, bbox_list in enumerate(bbox_lists)]
+
+    def _annotate_face_bboxes(self):
+        fa = self._get_face_alignment()
+        bbox_lists = []
+        frames = self._get_frame_list()
+
+        for frame in frames:
+            frame_id = int(frame.parent.name.split("_")[-1])
+            logger.info(f"Annotate facial bbox for frame: {frame_id}")
+            img = np.array(Image.open(frame))
+            bbox = fa.face_detector.detect_from_image(img)
+            if len(bbox) == 0:
+                # if no faces detected, something is weird and
+                # one shouldnt use the image
+                raise RuntimeError(f"Error: No bounding box found!")
+
+            bbox_lists.append(bbox)
+
+        bbox_path = self._select_bbox_path(bbox_lists)
+        bboxes = {}
+        
+        for i, frame in enumerate(frames):
+            frame_id = int(frame.parent.name.split("_")[-1])
+            bboxes[frame_id] = bbox_path[i]
+        return bboxes
+
     def _annotate_facial_landmarks(self):
         """
         Annotates each frame with 68 facial landmarks
         :return: dict mapping frame number to landmarks numpy array and the same thing for bboxes
         """
         # 68 facial landmark detector
-        fa = face_alignment.FaceAlignment(
-            face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
-        )
+        fa = self._get_face_alignment()
         frames = self._get_frame_list()
         landmarks = {}
-        bboxes = {}
+        bboxes = self._annotate_face_bboxes()
 
         for frame in frames:
             frame_id = int(frame.parent.name.split("_")[-1])
             logger.info(f"Annotate facial landmarks for frame: {frame_id}")
             img = np.array(Image.open(frame))
-            bbox = fa.face_detector.detect_from_image(img)
-
-            if len(bbox) == 0:
-                # if no faces detected, something is weird and
-                # one shouldnt use the image
-                raise RuntimeError(f"Error: No bounding box found for {frame}!")
-
-            else:
-                if len(bbox) > 1:
-                    # if multiple boxes detected, use the one with highest confidence
-                    bbox = [bbox[np.argmax(np.array(bbox)[:, -1])]]
-
-                lmks = fa.get_landmarks_from_image(img, detected_faces=bbox)[0]
+            bbox = bboxes[frame_id]
+            lmks = fa.get_landmarks_from_image(img, detected_faces=[bbox])[0]
 
             landmarks[frame_id] = lmks
-            bboxes[frame_id] = bbox[0]
+            bboxes[frame_id] = bbox
 
         return landmarks, bboxes
 
