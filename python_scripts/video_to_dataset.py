@@ -403,6 +403,7 @@ class Video2DatasetConverter:
 
                 l, t, r, b = crop_box
                 img = ttf.crop(img, t, l, b - t, r - l)
+                x_dim, y_dim = img.shape[-1], img.shape[-2]
 
             # pad
             if pad_to_square:
