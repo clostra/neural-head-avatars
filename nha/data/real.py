@@ -348,7 +348,8 @@ class RealDataset(Dataset):
             parsing_path = view.parent / view.name.replace("image", "parsing")
             parsing = torch.from_numpy(np.array(Image.open(parsing_path)))[None]
             sample["parsing"] = parsing
-            sample.update(self._get_eye_info(sample))
+            if self._has_lmks:
+                sample.update(self._get_eye_info(sample))
 
         return sample
 
