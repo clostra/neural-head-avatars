@@ -14,6 +14,7 @@ import numpy as np
 import json
 import subprocess
 import shutil
+import imageio
 import sys
 import torch
 import matplotlib.pyplot as plt
@@ -941,48 +942,90 @@ class Video2DatasetConverter:
             path = frame.parent / Video2DatasetConverter.NORMAL_FILE_NAME
             normal_img.save(path)
 
-
-def make_dataset_video(out_path):
+def make_dataset_video(
+        out_path,
+        load_lmk=True,
+        load_seg=True,
+        load_normal=True,
+        load_parsing=True,
+    ):
     out_path = Path(out_path)
     tmp_path = out_path / "video_tmp"
     tmp_path.mkdir(exist_ok=True)
+
+    ignore_frames_path = out_path / "ignore_frames.json"
+    if ignore_frames_path.exists():
+        with open(str(ignore_frames_path), 'r') as f:
+            ignore_frames = json.load(f)['ignore_frames']
+    else:
+        ignore_frames = []
 
     data_path = out_path
 
     data = RealDataset(
         data_path,
-        load_lmk=True,
-        load_seg=True,
-        load_normal=True,
-        load_parsing=True,
+        load_lmk=load_lmk,
+        load_seg=load_seg,
+        load_normal=load_normal,
+        load_parsing=load_parsing,
     )
 
     N = len(data)
-    for sample in data:
+    _, axes = plt.subplots(1, 5, figsize=(16, 3))
+    img_imshow_obj = None
+    seg_imshow_obj = None
+    normal_imshow_obj = None
+    parsing_imshow_obj = None
+    lmk_imshow_obj = None
+    lmk_scatter_obj = None
+    for i in range(len(data)):
+        if i in ignore_frames:
+            continue
+        sample = data[i]
         frame_id = sample["frame"]
         logger.info(f"Saving dataset video. Frame: {frame_id} of {N}")
         rgb = sample["rgb"]
-        seg = sample["seg"].float()[0]
-        lmks = torch.cat([sample["lmk2d"], sample["lmk2d_iris"]], 0)
-        lmks = lmks.numpy()
-        parsing = sample["parsing"][0]
-        normals = sample["normal"] * 0.5 + 0.5
-        normals = ttf.to_pil_image(normals)
-
-        _, axes = plt.subplots(1, 5, figsize=(16, 3))
         img = ttf.to_pil_image(rgb * 0.5 + 0.5)
-        axes[0].imshow(img)
-        axes[1].imshow(seg.numpy())
-        axes[2].imshow(parsing.numpy(), vmax=20)
-        axes[3].imshow(img)
-        lmks_mask = lmks[:, :2] < 0
-        lmks_mask = lmks_mask.sum(axis=1) == 0
-        axes[3].scatter(lmks[lmks_mask, 0], lmks[lmks_mask, 1], alpha=1, s=3)
-        axes[4].imshow(normals)
+        if img_imshow_obj is None:
+            img_imshow_obj = axes[0].imshow(img)
+        else:
+            img_imshow_obj.set_data(img)
+        if load_seg:
+            seg = sample["seg"].float()[0]
+            if seg_imshow_obj is None:
+                seg_imshow_obj = axes[1].imshow(seg.numpy())
+            else:
+                seg_imshow_obj.set_data(seg)
+        if load_lmk:
+            lmks = torch.cat([sample["lmk2d"], sample["lmk2d_iris"]], 0)
+            lmks = lmks.numpy()
+            lmks_mask = lmks[:, :2] < 0
+            lmks_mask = lmks_mask.sum(axis=1) == 0
+            if lmk_imshow_obj is None:
+                lmk_imshow_obj = axes[3].imshow(img)
+                lmk_scatter_obj = axes[3].scatter(lmks[lmks_mask, 0], lmks[lmks_mask, 1], alpha=1, s=3)
+            else:
+                lmk_imshow_obj.set_data(img)
+                lmk_scatter_obj.set_offsets(lmks[lmks_mask])
+
+        if load_parsing:
+            parsing = sample["parsing"][0]
+            if parsing_imshow_obj is None:
+                parsing_imshow_obj = axes[2].imshow(parsing.numpy(), vmax=20)
+            else:
+                parsing_imshow_obj.set_data(parsing)
+
+
+        if load_normal:
+            normals = sample["normal"] * 0.5 + 0.5
+            normals = ttf.to_pil_image(normals)
+            if normal_imshow_obj is None:
+                normal_imshow_obj = axes[4].imshow(normals.numpy())
+            else:
+                normal_imshow_obj.set_data(normals)
 
         plt.savefig(tmp_path / f"frame_{frame_id:04d}.png")
-        plt.close()
-
+        # plt.close()
     subprocess.run(
         [
             "ffmpeg",
