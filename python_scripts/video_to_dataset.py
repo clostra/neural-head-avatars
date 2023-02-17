@@ -1076,11 +1076,11 @@ def make_dataset_video(
 
         if load_normal:
             normals = sample["normal"] * 0.5 + 0.5
-            normals = ttf.to_pil_image(normals)
+            normals = normals.permute(1, 2, 0)
             if normal_imshow_obj is None:
                 normal_imshow_obj = axes[4].imshow(normals.numpy())
             else:
-                normal_imshow_obj.set_data(normals)
+                normal_imshow_obj.set_data(normals.numpy())
 
         plt.savefig(tmp_path / f"frame_{frame_id:04d}.png")
         # plt.close()
