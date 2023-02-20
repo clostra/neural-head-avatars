@@ -109,6 +109,8 @@ class Video2DatasetConverter:
     PARSING_FILE_NAME = "parsing_0000.png"
     NORMAL_FILE_NAME = "normals_0000.png"
 
+    fa = None
+
     def __init__(
         self,
         video_path,
@@ -133,7 +135,6 @@ class Video2DatasetConverter:
         self._keep_original_frames = keep_original_frames
         self._no_iris_landmarks = [-1] * 6
         self._transforms = {}
-        self.fa = None
 
         assert self._video_path.exists()
         self._data_path.mkdir(parents=True, exist_ok=True)
@@ -218,6 +219,10 @@ class Video2DatasetConverter:
         u = int(max(0, u - padding))
         b = int(min(height - 1, b + padding))
         return l, u, r, b
+    def _pad_bbox_ratio(self, bbox, width, height, padding_ratio):
+        bbox_min_side = min(bbox[2] - bbox[0], bbox[3] - bbox[1])
+        padding = bbox_min_side * padding_ratio
+        return self._pad_bbox(bbox, width, height, padding)
     def _get_aggregate_bbox(self, bboxes, height, width, padding=20):
         """
         Computes the maximum bounding box. Around all candidates
@@ -406,7 +411,7 @@ class Video2DatasetConverter:
             # crop
             if crop_face:
                 crop_box = bboxes[frame_id][:4]
-                crop_box = self._pad_bbox(crop_box, x_dim, y_dim, 20)
+                crop_box = self._pad_bbox_ratio(crop_box, x_dim, y_dim, padding_ratio=0.5)
                 # TODO: apply crop to bbox
                 l, t, r, b = crop_box
                 img = ttf.crop(img, t, l, b - t, r - l)
@@ -502,11 +507,11 @@ class Video2DatasetConverter:
                 img.save(path)
 
     def _get_face_alignment(self):
-        if self.fa is None:
-            self.fa = face_alignment.FaceAlignment(
+        if Video2DatasetConverter.fa is None:
+            Video2DatasetConverter.fa = face_alignment.FaceAlignment(
                 face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
             )
-        return self.fa
+        return Video2DatasetConverter.fa
 
     def _get_bbox_centers(self, bboxes):
         return np.stack(
@@ -1110,7 +1115,7 @@ def create_dataset(args):
         args.keep_original_frames,
     )
     converter.extract_frames()
-    converter.apply_transforms(crop_seg=False, pad_to_square=False)
+    converter.apply_transforms(crop_face=True, pad_to_square=False)
     converter.annotate_landmarks()
     converter.annotate_parsing()
     converter.annotate_segmentation()
