@@ -1461,6 +1461,8 @@ class NHAOptimizer(pl.LightningModule):
             "expr_reg": expr_reg,
             "pose_reg": pose_reg,
             "surface_reg": surface_reg,
+            "surface_area_reg": surface_area_reg,
+            "curvature_reg": curvature_reg,
             "iou": total_iou,
             "semantic_loss_ear": sem_ear,
             "semantic_iou_ear": iou_ear,
