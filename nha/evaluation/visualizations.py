@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 
 @torch.no_grad()
 def reconstruct_sequence(models,
-                         dataset, fps=25, batch_size=10, savepath=None):
+                         dataset, optimizer_module, fps=25, batch_size=10, savepath=None):
     """
     Produces a reconstructed animation of a tracked sequence using the tracking results provided by dataset and the
     models provided in models
@@ -48,7 +48,7 @@ def reconstruct_sequence(models,
     for m_name, m_ckpt in models.items():
         logger.info(f"Start Inference for model {m_name}")
         hparams_file = Path(m_ckpt).parents[1] / "hparams.yaml"
-        m = NHAOptimizer.load_from_checkpoint(m_ckpt,
+        m = optimizer_module.load_from_checkpoint(m_ckpt,
                                               hparams_file=str(hparams_file)).cuda()
 
         m.eval()

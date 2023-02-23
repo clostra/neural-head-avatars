@@ -126,12 +126,26 @@ def train_pl_module(optimizer_module, data_module, args=None):
         model_dict = OrderedDict(model_dict)
         eval_path = log_dir / f"QuantitativeEvaluation-{model_name}.json"
 
-        eval_dict = evaluate_models(models=model_dict, dataloader=dataloader)
+        eval_dict = evaluate_models(
+            models=model_dict, 
+            dataloader=dataloader,
+            optimizer_module=optimizer_module
+        )
         with open(eval_path, "w") as f:
             json.dump(eval_dict, f)
 
         # scene reconstruction
-        reconstruct_sequence(model_dict, dataset=data._val_set, batch_size=bs,
-                             savepath=str(log_dir / f"SceneReconstruction{model_name}-val.mp4"))
-        reconstruct_sequence(model_dict, dataset=data._train_set, batch_size=bs,
-                             savepath=str(log_dir / f"SceneReconstruction-{model_name}-train.mp4"))
+        reconstruct_sequence(
+            model_dict, 
+            dataset=data._val_set, 
+            optimizer_module=optimizer_module,
+            batch_size=bs, 
+            savepath=str(log_dir / f"SceneReconstruction{model_name}-val.mp4")
+        )
+        reconstruct_sequence(
+            model_dict, 
+            dataset=data._train_set, 
+            optimizer_module=optimizer_module,
+            batch_size=bs, 
+            savepath=str(log_dir / f"SceneReconstruction-{model_name}-train.mp4")
+        )

@@ -110,6 +110,7 @@ class Evaluator:
 def evaluate_models(
     models: OrderedDict,
     dataloader,
+    optimizer_module,
     metrics=["L1", "L2", "PSNR", "MS_SSIM", "LMK", "LPIPS", "CPBD"],
     blur_seg=0.0,
 ):
@@ -142,7 +143,7 @@ def evaluate_models(
 
     for model_name, ckpt in models.items():
         # loading model
-        model = nha.models.nha_optimizer.NHAOptimizer.load_from_checkpoint(ckpt).cuda()
+        model = optimizer_module.load_from_checkpoint(ckpt).cuda()
         model.eval()
 
         # evaluation:
