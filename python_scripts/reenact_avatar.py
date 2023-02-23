@@ -24,6 +24,11 @@ def reenact_avatar(target_model: NHAOptimizer, driving_model: NHAOptimizer, targ
     base_drive_params = driving_model._create_flame_param_batch(base_drive_sample)
     base_target_params = target_model._create_flame_param_batch(base_target_sample)
 
+    max_hw = (
+        max(base_drive_sample["rgb"].shape[2], base_target_sample["rgb"].shape[2]),
+        max(base_drive_sample["rgb"].shape[3], base_target_sample["rgb"].shape[3]),
+    )
+
     tmp_dir_pred = Path("/tmp/scene_reenactment_pred")
     tmp_dir_drive = Path("/tmp/scene_reenactment_drive")
     os.makedirs(tmp_dir_drive, exist_ok=True)
@@ -35,12 +40,15 @@ def reenact_avatar(target_model: NHAOptimizer, driving_model: NHAOptimizer, targ
 
     for idcs in tqdm(torch.split(torch.from_numpy(driving_tracking_results["frame"]), batch_size)):
         batch = dict_2_device(tracking_results_2_data_batch(driving_tracking_results, idcs.tolist()), target_model.device)
+        batch["rgb"] = torch.zeros(batch["rgb"].shape[0], 1, *max_hw)
 
         rgb_driving = driving_model.forward(batch, symmetric_rgb_range=False)[:, :3].clamp(0,1)
 
         # change camera parameters
         batch["cam_intrinsic"] = base_target_sample["cam_intrinsic"].expand_as(batch["cam_intrinsic"])
         batch["cam_extrinsic"] = base_target_sample["cam_extrinsic"].expand_as(batch["cam_extrinsic"])
+        # for correct H,W
+        batch["rgb"] = base_target_sample["rgb"].expand(batch["rgb"].shape[0], -1, -1, -1)
 
         rgb_target = target_model.predict_reenaction(batch, driving_model=driving_model,
                                                      base_target_params=base_target_params,
@@ -59,9 +67,9 @@ def reenact_avatar(target_model: NHAOptimizer, driving_model: NHAOptimizer, targ
 
     os.makedirs(outpath, exist_ok=True)
     os.system(f"ffmpeg -pattern_type glob -i {tmp_dir_pred}/'*.png' -c:v libx264 -preset slow  -profile:v high "
-              f"-level:v 4.0 -pix_fmt yuv420p -crf 22 -codec:a aac {outpath}/Reenactment_pred.mp4 -y")
+              f"-level:v 4.0 -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' -pix_fmt yuv420p -crf 22 -codec:a aac {outpath}/Reenactment_pred.mp4 -y")
     os.system(f"ffmpeg -pattern_type glob -i {tmp_dir_drive}/'*.png' -c:v libx264 -preset slow  -profile:v high "
-              f"-level:v 4.0 -pix_fmt yuv420p -crf 22 -codec:a aac {outpath}/Reenactment_drive.mp4 -y")
+              f"-level:v 4.0 -vf 'pad=ceil(iw/2)*2:ceil(ih/2)*2' -pix_fmt yuv420p -crf 22 -codec:a aac {outpath}/Reenactment_drive.mp4 -y")
     os.system(f"ffmpeg  -i {outpath}/Reenactment_drive.mp4 -i {outpath}/Reenactment_pred.mp4 "
               f"-filter_complex hstack=inputs=2 {outpath}/Reenactment_combined.mp4 -y")
 
