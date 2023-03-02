@@ -1,6 +1,7 @@
 from nha.util.log import get_logger
 from nha.data.real import RealDataset, CLASS_IDCS, frame2id, SEGMENTATION_LABELS
 from nha.util.general import get_mask_bbox
+from nha.util.bbox import BBox
 
 from pathlib import Path
 from PIL import Image
@@ -212,17 +213,20 @@ class Video2DatasetConverter:
         with open(path, "w") as f:
             json.dump(self._transforms, f)
 
-    def _pad_bbox(self, bbox, width, height, padding):
+    @classmethod
+    def _pad_bbox(cls, bbox, width, height, padding):
         l, u, r, b = bbox
         l = int(max(0, l - padding))
         r = int(min(width - 1, r + padding))
         u = int(max(0, u - padding))
         b = int(min(height - 1, b + padding))
         return l, u, r, b
-    def _pad_bbox_ratio(self, bbox, width, height, padding_ratio):
+
+    @classmethod
+    def _pad_bbox_ratio(cls, bbox, width, height, padding_ratio):
         bbox_min_side = min(bbox[2] - bbox[0], bbox[3] - bbox[1])
         padding = bbox_min_side * padding_ratio
-        return self._pad_bbox(bbox, width, height, padding)
+        return cls._pad_bbox(bbox, width, height, padding)
     def _get_aggregate_bbox(self, bboxes, height, width, padding=20):
         """
         Computes the maximum bounding box. Around all candidates
@@ -390,6 +394,18 @@ class Video2DatasetConverter:
         pad_dims = None
         if crop_face:
             bboxes = self._annotate_face_bboxes()
+            # Make all the boxes the same size
+            bboxes = {
+                key: BBox([t, l], [b, r])
+                for key, (l, t, r, b, _) in bboxes.items()
+            }
+            bbox_sizes = [bbox.size() for bbox in bboxes.values()]
+            bbox_max_size = np.array(bbox_sizes).max(0)
+            img = Image.open(self._get_frame_list()[0])
+            bboxes = {
+                key: bbox.resize(bbox_max_size, img.size)
+                for key, bbox in bboxes.items()
+            }
         # transform all images
         for frame in self._get_frame_list():
             frame_id = int(frame.parent.name.split("_")[-1])
@@ -410,11 +426,9 @@ class Video2DatasetConverter:
 
             # crop
             if crop_face:
-                crop_box = bboxes[frame_id][:4]
-                crop_box = self._pad_bbox_ratio(crop_box, x_dim, y_dim, padding_ratio=0.5)
-                # TODO: apply crop to bbox
-                l, t, r, b = crop_box
-                img = ttf.crop(img, t, l, b - t, r - l)
+                crop_bbox = bboxes[frame_id]
+                crop_bbox = crop_bbox.resize(crop_bbox.size() * 2, [y_dim, x_dim])
+                img = img[(slice(None), *crop_bbox.to_slice())]
                 x_dim, y_dim = img.shape[-1], img.shape[-2]
 
             # pad
@@ -506,20 +520,23 @@ class Video2DatasetConverter:
                 img = img.resize(target_res, Image.BICUBIC)
                 img.save(path)
 
-    def _get_face_alignment(self):
-        if Video2DatasetConverter.fa is None:
-            Video2DatasetConverter.fa = face_alignment.FaceAlignment(
+    @classmethod
+    def _get_face_alignment(cls):
+        if cls.fa is None:
+            cls.fa = face_alignment.FaceAlignment(
                 face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
             )
-        return Video2DatasetConverter.fa
+        return cls.fa
 
-    def _get_bbox_centers(self, bboxes):
+    @classmethod
+    def _get_bbox_centers(cls, bboxes):
         return np.stack(
             ((bboxes[:, 2] + bboxes[:, 0])/2, (bboxes[:, 3] + bboxes[:, 1])/2),
             axis=-1
         )
 
-    def _select_bbox_path(self, bbox_lists):
+    @classmethod
+    def _select_bbox_path(cls, bbox_lists):
         """
         Find an optimal path through bounding boxes in each frame
         Returns a list of selected bounding boxes
@@ -528,11 +545,11 @@ class Video2DatasetConverter:
             # Variables to store data about the previous frame, "cur" refers to current
             cur_bbox_idx = i
             cur_path = [cur_bbox_idx]
-            cur_bbox_centers = self._get_bbox_centers(np.array(bbox_lists[0]))
+            cur_bbox_centers = cls._get_bbox_centers(np.array(bbox_lists[0]))
 
             for bboxes in bbox_lists[1:]:
                 # Get centers of bounding BBoxes from the next frame
-                bbox_centers = self._get_bbox_centers(np.array(bboxes))
+                bbox_centers = cls._get_bbox_centers(np.array(bboxes))
                 # Get closest BBox from the next frame
                 closest_bbox_idx = np.linalg.norm(bbox_centers - cur_bbox_centers[cur_bbox_idx], axis=-1).argmin()
                 closest_bbox_center = bbox_centers[closest_bbox_idx]
