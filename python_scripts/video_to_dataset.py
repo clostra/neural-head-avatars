@@ -28,6 +28,7 @@ from fdlite import (
     IrisLandmark,
     iris_roi_from_face_landmarks,
 )
+from gfpgan import GFPGANer
 
 this_file = Path(__file__)
 nha_repo_path = this_file.parent.parent
@@ -111,6 +112,10 @@ class Video2DatasetConverter:
     NORMAL_FILE_NAME = "normals_0000.png"
 
     fa = None
+    parsing_model = None
+    matting_model = None
+    normal_model = None
+    face_enhancer = None
 
     def __init__(
         self,
@@ -427,7 +432,8 @@ class Video2DatasetConverter:
             # crop
             if crop_face:
                 crop_bbox = bboxes[frame_id]
-                crop_bbox = crop_bbox.resize(crop_bbox.size() * 2, [y_dim, x_dim])
+                crop_bbox_new_size = np.minimum(crop_bbox.size() * 2, [y_dim, x_dim])
+                crop_bbox = crop_bbox.resize(crop_bbox_new_size, [y_dim, x_dim])
                 img = img[(slice(None), *crop_bbox.to_slice())]
                 x_dim, y_dim = img.shape[-1], img.shape[-2]
 
@@ -447,26 +453,15 @@ class Video2DatasetConverter:
 
             # scale
             if scale:
-                if target_res is None:
-                    if x_dim > y_dim:
-                        width = self._scale
-                        height = int(np.round(y_dim * self._scale / x_dim))
-                    else:
-                        height = self._scale
-                        width = int(np.round(x_dim * self._scale / y_dim))
-
-                    # store the target resolution
+                img = self._resize_with_enhancement(img, self._scale)
+                # store the target resolution
+                if 'scale' not in self._transforms:
                     self._transforms["scale"] = {
                         "w_in": x_dim,
-                        "w_out": width,
+                        "w_out": img.shape[-1],
                         "h_in": y_dim,
-                        "h_out": height,
+                        "h_out": img.shape[-2],
                     }
-                    target_res = (height, width)
-                if (y_dim, x_dim) != target_res:
-                    img = ttf.resize(
-                        img, target_res, InterpolationMode.BILINEAR, antialias=True
-                    )
 
             img = ttf.to_pil_image(img)
             img.save(frame)
@@ -527,6 +522,48 @@ class Video2DatasetConverter:
                 face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
             )
         return cls.fa
+    @classmethod
+    def _get_face_enhancer(cls, scale_factor):
+        if cls.face_enhancer is None:
+            cls.face_enhancer = GFPGANer(
+                model_path='https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth',
+                upscale=scale_factor,
+                arch='clean',
+                channel_multiplier=2,
+                bg_upsampler=None
+            )
+            cls.face_enhancer.face_helper.use_parse = False # Because the parser is terrible
+
+        cls.face_enhancer.upsacle = scale_factor
+        cls.face_enhancer.face_helper.upscale_factor = scale_factor
+        return cls.face_enhancer
+    @classmethod
+    def _get_normal_model(cls):
+        if cls.normal_model is None:
+            model = ResNetUNet(n_class=3).cuda()
+            model.load_state_dict(torch.load(NORMAL_MODEL_PATH))
+            model.eval()
+            cls.normal_model = model
+        return cls.normal_model
+    @classmethod
+    def _get_parsing_model(cls):
+        if cls.parsing_model is None:
+            # setting up parsing network
+            n_classes = 19
+            model = BiSeNet(n_classes=n_classes)
+            model.cuda()
+            model.load_state_dict(torch.load(PARSING_MODEL_PATH))
+            model.eval()
+            cls.parsing_model = model
+        return cls.parsing_model
+    @classmethod
+    def _get_matting_model(cls):
+        if cls.matting_model is None:
+            # setting up matting network
+            cls.matting_model = MattingNetwork("mobilenetv3").eval().cuda()
+            cls.matting_model.load_state_dict(torch.load(SEG_MODEL_PATH))
+        return cls.matting_model
+
 
     @classmethod
     def _get_bbox_centers(cls, bboxes):
@@ -855,18 +892,29 @@ class Video2DatasetConverter:
             seg = seg.astype(np.uint8) * SEGMENTATION_LABELS["head"]
             cv2.imwrite(str(seg_path), seg)
 
+    def _resize_with_enhancement(self, img, target_scale: int):
+        scale_factor = float(target_scale / max(img.shape[1:]))
+        if max(img.shape[1:]) >= target_scale:
+            target_res = int(img.shape[1] * scale_factor), int(img.shape[2] * scale_factor)
+            img = ttf.resize(
+                img, target_res, InterpolationMode.BILINEAR, antialias=True
+            )
+            return img
+        else:
+            img = np.array(ttf.to_pil_image(img))
+            face_enhancer = self._get_face_enhancer(scale_factor)
+            _, _, output = face_enhancer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
+            output = ttf.to_tensor(Image.fromarray(output))
+            return output
+
+
     def annotate_parsing(self):
         """
         Adds face parsing annotation
         :return:
         """
 
-        # setting up parsing network
-        n_classes = 19
-        model = BiSeNet(n_classes=n_classes)
-        model.cuda()
-        model.load_state_dict(torch.load(PARSING_MODEL_PATH))
-        model.eval()
+        model = self._get_parsing_model()
 
         normalize_img = Compose(
             [
@@ -877,9 +925,7 @@ class Video2DatasetConverter:
 
         bgr = torch.tensor([0.47, 1, 0.6]).view(3, 1, 1).cuda()  # Green background.
 
-        # setting up matting network
-        matting_model = MattingNetwork("mobilenetv3").eval().cuda()
-        matting_model.load_state_dict(torch.load(SEG_MODEL_PATH))
+        matting_model = self._get_matting_model()
 
         rec = [None] * 4  # Set initial recurrent states to None
         downsample_ratio = None
@@ -976,9 +1022,7 @@ class Video2DatasetConverter:
         return vs, ve, us, ue
 
     def annotate_face_normals(self):
-        model = ResNetUNet(n_class=3).cuda()
-        model.load_state_dict(torch.load(NORMAL_MODEL_PATH))
-        model.eval()
+        model = self._get_normal_model()
 
         for frame in self._get_frame_list():
             frame_id = int(frame.parent.name.split("_")[-1])
