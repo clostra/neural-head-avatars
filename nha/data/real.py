@@ -310,7 +310,7 @@ class RealDataset(Dataset):
 
         # camera
         if self._has_camera:
-            tr = self._tracking_results
+            tr = tracking_results
 
             track_h, track_w = tracking_resolution
             img_h, img_w = sample["rgb"].shape[-2], sample["rgb"].shape[-1]
@@ -332,7 +332,7 @@ class RealDataset(Dataset):
             sample["cam_extrinsic"] = torch.from_numpy(tr["RT"]).float()
 
         if self._has_light:
-            tr = self._tracking_results
+            tr = tracking_results
             if len(tr["light"].shape) == 3:
                 sample["light"] = torch.from_numpy(tr["light"][0]).float()
             else:
@@ -450,13 +450,19 @@ class MultipleVideosDataset(RealDataset):
         self._video_paths = []
         self._video_to_id = {}
         self._load(frame_paths, video_to_id)
+
         self._tracking_results = [
-            dict(np.load(str(video_path / tracking_results_filename)))
+            dict(np.load(self._get_latest_tracking(video_path / tracking_results_filename)))
             for video_path in self._video_paths
         ]
         self._tracking_resolution = [
             tr["image_size"] for tr in self._tracking_results
         ]
+
+    def _get_latest_tracking(self, tracking_results_path):
+        tracking_versions = list(tracking_results_path.glob("tracking_*"))
+        tracking_versions = sorted(tracking_versions, key=lambda p: int(p.name.split('_')[1]))
+        return tracking_versions[-1] / "tracked_flame_params.npz"
 
     def _load(self, frame_paths, video_to_id):
         if frame_paths is None and video_to_id is None:
@@ -467,10 +473,11 @@ class MultipleVideosDataset(RealDataset):
                 frame_paths += list(video_path.glob("frame_*"))
             self._video_to_id = {video_path.name: i for i, video_path in enumerate(self._video_paths)}
         else:
-            assert frame_paths is None or video_to_id is None, "Both should be defined"
+            assert not (frame_paths is None or video_to_id is None), "Both should be defined"
             self._video_paths = [None for _ in range(len(video_to_id))]
             for video_name, i in video_to_id.items():
                 self._video_paths[i] = self._path / video_name
+            self._video_to_id = video_to_id
         self._views = [frame_path / "image_0000.png" for frame_path in frame_paths]
 
     def __len__(self):
@@ -753,9 +760,14 @@ class MultipleVideosDataModule(pl.LightningModule):
     @property
     def video_to_id(self):
         return self._video_to_id
+    
     @property
     def video_paths(self):
         return self._video_paths
+
+    @property
+    def video_names(self):
+        return [video_path.name for video_path in self._video_paths]
 
     def get_frames(self, video_name):
         return sorted(list((self._path / video_name).glob("frame_*")))
@@ -798,7 +810,6 @@ class MultipleVideosDataModule(pl.LightningModule):
         parser.add_argument("--train_size", type=float, required=False, default=0.8)
         parser.add_argument("--train_batch_size", type=int, default=8, nargs=3)
         parser.add_argument("--validation_batch_size", type=int, default=8, nargs=3)
-        parser.add_argument("--tracking_results_filename", type=str, default=None)
         parser.add_argument("--load_uv", action="store_true")
         parser.add_argument("--load_normal", action="store_true")
         parser.add_argument("--load_flame", action="store_true")
@@ -809,6 +820,7 @@ class MultipleVideosDataModule(pl.LightningModule):
         parser.add_argument("--load_camera", action="store_true")
         parser.add_argument("--load_light", action="store_true")
         parser.add_argument("--load_parsing", action="store_true")
+        parser.add_argument("--tracking_results_filename", type=str, required=False, default='tracking_results')
 
         return parser
 
