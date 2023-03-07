@@ -228,7 +228,7 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         self._leaky_hinge = LeakyHingeLoss(0.0, 1.0, 0.3)
         self._masked_L1 = MaskedCriterion(torch.nn.L1Loss(reduction="none"))
 
-        if Path("assets/InsightFace/backbone.pth").exists():
+        if Path(os.path.join(ASSETS, "InsightFace/backbone.pth")).exists():
             self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())  # don't store perc_loss weights as model weights
         else:
             self._perceptual_loss = None
@@ -260,7 +260,7 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         for i in range(self._num_videos):
             self._frame_count_prefixes[i] = s
             s += self._frames_per_video[i]
-        self._frame_count = s
+        self._num_frames = s
     def on_train_start(self) -> None:
 
         # Copying config and body part weights to checkpoint dir
@@ -271,9 +271,6 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
 
         if not conf_path.exists():
             shutil.copy(self.hparams["config"], conf_path, follow_symlinks=True)
-
-        if not split_conf_path.exists():
-            shutil.copy(self.hparams["split_config"], split_conf_path, follow_symlinks=True)
 
         if not body_part_weights_path.exists():
             shutil.copy(self.hparams["body_part_weights"], body_part_weights_path, follow_symlinks=True)
