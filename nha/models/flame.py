@@ -378,15 +378,9 @@ class FlameHead(nn.Module):
         ignored_uvs = set(range(len(self._vertex_uvs))) - set(
             torch.unique(new_face_uvs).numpy().astype(int))
 
-        oldvertidx2newvertidx = torch.tensor(
-            [vertex_filter[:i + 1].long().sum() - 1 for i in range(len(vertex_filter))],
-            device=device)
-        olduvidx2newuvidx = torch.tensor(
-            [uv_filter[:i + 1].long().sum() - 1 for i in range(len(uv_filter))],
-            device=device)
-        oldfaceidx2newfaceidx = torch.tensor(
-            [face_filter[:i + 1].sum() - 1 for i in range(len(face_filter))],
-            device=device)
+        oldvertidx2newvertidx = torch.cumsum(vertex_filter, 0).to(device) - 1
+        olduvidx2newuvidx = torch.cumsum(uv_filter, 0).to(device) - 1
+        oldfaceidx2newfaceidx = torch.cumsum(face_filter, 0).to(device) - 1
 
         return dict(vert_filter=vertex_filter, face_filter=face_filter, uv_filter=uv_filter,
                     vert_reindexer=oldvertidx2newvertidx,
