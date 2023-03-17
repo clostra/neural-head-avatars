@@ -386,7 +386,7 @@ class Video2DatasetConverter:
         bbox[2] = min(width, bbox[2] - crop_bbox[0])
         bbox[3] = min(height, bbox[3] - crop_bbox[1])
 
-    def apply_transforms(self, crop_face=True, scale=True, pad_to_square=True, log=True):
+    def apply_transforms(self, crop_face=True, scale=True, pad_to_square=True, enhance=True, log=True):
         """
         Optionally, performs some transformations on the frames:
         1.) Crop frames around head segmentation. This ensures tight
@@ -395,9 +395,9 @@ class Video2DatasetConverter:
         3.) Resize
         """
 
-        target_res = None
         pad_dims = None
         if crop_face:
+            logger.info(f"Preannotating face bboxes for cropping")
             bboxes = self._annotate_face_bboxes()
             # Make all the boxes the same size
             bboxes = {
@@ -431,6 +431,7 @@ class Video2DatasetConverter:
 
             # crop
             if crop_face:
+                logger.info(f"Cropping the face")
                 crop_bbox = bboxes[frame_id]
                 crop_bbox_new_size = np.minimum(crop_bbox.size() * 2, [y_dim, x_dim])
                 crop_bbox = crop_bbox.resize(crop_bbox_new_size, [y_dim, x_dim])
@@ -439,6 +440,7 @@ class Video2DatasetConverter:
 
             # pad
             if pad_to_square:
+                logger.info(f"Padding to square")
                 img, padding = self._pad_to_square(img, mode="constant")
                 if pad_dims is None:
                     new_x_dim, new_y_dim = img.shape[-1], img.shape[-2]
@@ -453,7 +455,18 @@ class Video2DatasetConverter:
 
             # scale
             if scale:
-                img = self._resize_with_enhancement(img, self._scale)
+                logger.info(f"Scaling")
+                if enhance:
+                    logger.info(f"Enhancing")
+                    img = self._resize_with_enhancement(img, self._scale)
+                else:
+                    target_res = [
+                        int(self._scale / max(img.shape[1:]) * img.shape[1]),
+                        int(self._scale / max(img.shape[1:]) * img.shape[2]),
+                    ]
+                    img = ttf.resize(
+                        img, target_res, InterpolationMode.BILINEAR, antialias=True
+                    )
                 # store the target resolution
                 if 'scale' not in self._transforms:
                     self._transforms["scale"] = {
@@ -462,7 +475,7 @@ class Video2DatasetConverter:
                         "h_in": y_dim,
                         "h_out": img.shape[-2],
                     }
-
+            logger.info(f"Saving image size {img.shape}")
             img = ttf.to_pil_image(img)
             img.save(frame)
 
