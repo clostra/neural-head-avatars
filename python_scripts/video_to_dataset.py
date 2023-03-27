@@ -616,22 +616,19 @@ class Video2DatasetConverter:
             if len(cur_path) == len(bbox_lists):
                 return [bbox_list[cur_path[i]] for i, bbox_list in enumerate(bbox_lists)]
 
-    def _annotate_face_bboxes(self):
+    def _annotate_face_bboxes(self, batch_size=20):
         fa = self._get_face_alignment()
-        bbox_lists = []
         frames = self._get_frame_list()
+        imgs = self._load_frames(frames, format='torch')
+        bbox_lists = []
+        for imgs_chunk in imgs.split(batch_size, dim=0):
+            bbox_lists += fa.face_detector.detect_from_batch(imgs_chunk * 255)
 
-        for frame in frames:
-            frame_id = int(frame.parent.name.split("_")[-1])
-            logger.info(f"Annotate facial bbox for frame: {frame_id}")
-            img = np.array(Image.open(frame))
-            bbox = fa.face_detector.detect_from_image(img)
+        for bbox in bbox_lists:
             if len(bbox) == 0:
                 # if no faces detected, something is weird and
                 # one shouldnt use the image
                 raise RuntimeError(f"Error: No bounding box found!")
-
-            bbox_lists.append(bbox)
 
         bbox_path = self._select_bbox_path(bbox_lists)
         bboxes = {}
