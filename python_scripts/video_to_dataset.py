@@ -7,6 +7,8 @@ from pathlib import Path
 from PIL import Image
 from torchvision.transforms import *
 import torchvision.transforms.functional as ttf
+from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FFMpegWriter
 
 
 import cv2
@@ -1087,8 +1089,6 @@ def make_dataset_video(
         load_parsing=True,
     ):
     out_path = Path(out_path)
-    tmp_path = out_path / "video_tmp"
-    tmp_path.mkdir(exist_ok=True)
 
     ignore_frames_path = out_path / "ignore_frames.json"
     if ignore_frames_path.exists():
@@ -1108,77 +1108,58 @@ def make_dataset_video(
     )
 
     N = len(data)
-    _, axes = plt.subplots(1, 5, figsize=(16, 3))
+    fig, axes = plt.subplots(1, 5, figsize=(16, 3))
     img_imshow_obj = None
     seg_imshow_obj = None
     normal_imshow_obj = None
     parsing_imshow_obj = None
     lmk_imshow_obj = None
     lmk_scatter_obj = None
-    for i in range(len(data)):
-        if i in ignore_frames:
-            continue
-        sample = data[i]
-        frame_id = sample["frame"]
-        logger.info(f"Saving dataset video. Frame: {frame_id} of {N}")
-        rgb = sample["rgb"]
+    def init():
+        sample = data[0]
         img = ttf.to_pil_image(rgb * 0.5 + 0.5)
-        if img_imshow_obj is None:
-            img_imshow_obj = axes[0].imshow(img)
-        else:
-            img_imshow_obj.set_data(img)
+        img_imshow_obj = axes[0].imshow(img)
         if load_seg:
-            seg = sample["seg"].float()[0]
-            if seg_imshow_obj is None:
-                seg_imshow_obj = axes[1].imshow(seg.numpy())
-            else:
-                seg_imshow_obj.set_data(seg)
+            seg_imshow_obj = axes[1].imshow(sample["seg"].float()[0])
+        if load_parsing:
+            parsing = sample["parsing"][0]
+            parsing_imshow_obj = axes[2].imshow(parsing)
         if load_lmk:
             lmks = torch.cat([sample["lmk2d"], sample["lmk2d_iris"]], 0)
             lmks = lmks.numpy()
             lmks_mask = lmks[:, :2] < 0
             lmks_mask = lmks_mask.sum(axis=1) == 0
-            if lmk_imshow_obj is None:
-                lmk_imshow_obj = axes[3].imshow(img)
-                lmk_scatter_obj = axes[3].scatter(lmks[lmks_mask, 0], lmks[lmks_mask, 1], alpha=1, s=3)
-            else:
-                lmk_imshow_obj.set_data(img)
-                lmk_scatter_obj.set_offsets(lmks[lmks_mask])
-
-        if load_parsing:
-            parsing = sample["parsing"][0]
-            if parsing_imshow_obj is None:
-                parsing_imshow_obj = axes[2].imshow(parsing.numpy(), vmax=20)
-            else:
-                parsing_imshow_obj.set_data(parsing)
-
-
+            lmk_imshow_obj = axes[3].imshow(img)
+            lmk_scatter_obj = axes[3].scatter(lmks[lmks_mask])
         if load_normal:
             normals = sample["normal"] * 0.5 + 0.5
             normals = normals.permute(1, 2, 0)
-            if normal_imshow_obj is None:
-                normal_imshow_obj = axes[4].imshow(normals.numpy())
-            else:
-                normal_imshow_obj.set_data(normals.numpy())
-
-        plt.savefig(tmp_path / f"frame_{frame_id:04d}.png")
-        # plt.close()
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-pattern_type",
-            "glob",
-            "-i",
-            f"{tmp_path}/*.png",
-            "-r",
-            "25",
-            "-y",
-            str(out_path / "dataset.mp4"),
-        ]
-    )
-
-    shutil.rmtree(tmp_path)
-
+            normal_imshow_obj = axes[4].imshow(normals.numpy())
+    def update(i):
+        sample = data[i]
+        img = ttf.to_pil_image(rgb * 0.5 + 0.5)
+        img_imshow_obj.set_data(img)
+        if load_seg:
+            seg_imshow_obj.set_data(sample["seg"].float()[0])
+        if load_parsing:
+            parsing = sample["parsing"][0]
+            parsing_imshow_obj.set_data(parsing)
+        if load_lmk:
+            lmks = torch.cat([sample["lmk2d"], sample["lmk2d_iris"]], 0)
+            lmks = lmks.numpy()
+            lmks_mask = lmks[:, :2] < 0
+            lmks_mask = lmks_mask.sum(axis=1) == 0
+            lmk_imshow_obj.set_data(img)
+            lmk_scatter_obj.set_offsets(lmks[lmks_mask])
+        if load_normal:
+            normals = sample["normal"] * 0.5 + 0.5
+            normals = normals.permute(1, 2, 0)
+            normal_imshow_obj.set_data(normals.numpy())
+        
+    ani = FuncAnimation(fig, update, frames=np.arange(len(data)),
+                            init_func=init, blit=True, interval = 1000 / 30)
+    writer = FFMpegWriter(fps=30)
+    ani.save(data_path / "dataset.mp4", writer=writer)
 
 def create_dataset(args):
     converter = Video2DatasetConverter(
