@@ -93,6 +93,7 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
             dict(name_or_flags="--epochs_joint", type=int, default=500,
                  help="Until which epoch to train model jointly while keeping model fixed"),
             dict(name_or_flags="--image_log_period", type=int, default=10),
+            dict(name_or_flags="--image_log_head_num", type=int, default=2),
 
             # lr settings
             dict(name_or_flags="--flame_lr", default=0.005, type=float, nargs=3),
@@ -131,7 +132,7 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         self.save_hyperparameters()
         self.automatic_optimization = False
 
-        self.callbacks = [pl.callbacks.ModelCheckpoint(filename="{epoch:02d}", save_last=True)]
+        self.callbacks = [pl.callbacks.ModelCheckpoint(filename="{epoch:02d}", save_top_k=None, monitor=None)]
 
         # frame ids
         self._num_videos = num_videos
@@ -152,7 +153,6 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
             upsample_regions=upsample_regions,
             spatial_blur_sigma=self.hparams["spatial_blur_sigma"],
         )
-
         self._shape = torch.nn.Parameter(torch.zeros(self._num_videos, FLAME_N_SHAPE), requires_grad=True)
         self._expr = torch.nn.Parameter(torch.zeros(self._num_frames, FLAME_N_EXPR), requires_grad=True)
         self._neck_pose = torch.nn.Parameter(torch.zeros(self._num_frames, 3), requires_grad=True)
@@ -255,11 +255,12 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         self.register_buffer("mouth_conditioning_max", torch.zeros(13) + 100)
 
     def _init_frame_mapping(self):
-        self._frame_count_prefixes = [0 for _ in range(self._num_videos)]
+        frame_count_prefixes = torch.zeros((self._num_videos,), dtype=torch.int32)
         s = 0
         for i in range(self._num_videos):
-            self._frame_count_prefixes[i] = s
+            frame_count_prefixes[i] = s
             s += self._frames_per_video[i]
+        self.register_buffer("_frame_count_prefixes", frame_count_prefixes)
         self._num_frames = s
     def on_train_start(self) -> None:
 
@@ -351,23 +352,24 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         conditions = batch_rodrigues(neck.detach()).view(-1, 9)
 
         # increase batch_size by one for static mesh
-        batch_size += 1
+        # batch_size += 1
 
         # add zero condition to the end
-        static_cond = torch.zeros_like(conditions[0])
-        conditions = torch.cat([conditions, static_cond[None]], dim=0)
+        # static_cond = torch.zeros_like(conditions[0])
+        # conditions = torch.cat([conditions, static_cond[None]], dim=0)
 
         # N x D -> N*V x D
         V = len(v_temp)
 
-        # V x 3 -> N*V x 3
+        # V x 3 -> N x V x 3
         v_temp = v_temp[None, ...].expand(batch_size, -1, -1)
         x = torch.cat([v_temp, self._vert_feats[video_id]], dim=-1) # N x V x D
 
-        mlp_out = self._offset_mlp(x, conditions)
-        batch_size -= 1
-        dynamic_offsets = mlp_out[:batch_size]
-        static_offsets = mlp_out[[-1]].expand(batch_size, -1, -1)
+        dynamic_offsets = self._offset_mlp(x, conditions)
+        # batch_size -= 1
+        # dynamic_offsets = mlp_out[:batch_size]
+        static_conditions = torch.zeros_like(conditions[0])[None].expand(batch_size, -1)
+        static_offsets = self._offset_mlp(x, static_conditions)
 
         if self._blurred_vertex_labels.device != self.device:
             self._blurred_vertex_labels = self._blurred_vertex_labels.to(self.device)
@@ -451,7 +453,7 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         if ignore_offsets:
             p["offsets"] = None
         else:
-            p["offsets"] = self._predict_offsets(p["neck"])
+            p["offsets"] = self._predict_offsets(p["neck"], video_id)
 
         return p
 
@@ -524,7 +526,7 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
                 image_size=image_size,
                 blur_radius=0,
                 faces_per_pixel=2,
-                bin_size=None,
+                bin_size=0,
                 max_faces_per_bin=None,
                 clip_barycentric_coords=False,
                 perspective_correct=True,
@@ -725,7 +727,8 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         pixel_face_coords = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, face_coords)
 
         # EXPL TEXTURE SAMPLING
-        mask = fragments.pix_to_face != -1
+        mask = fragments.pix_to_face != -1 # N x H x W x K
+        pix_subject_id = video_id[:, None, None].expand(-1, H, W) # N x H x W x K
         uv_coords = self._flame.face_uvcoords.repeat(N, 1, 1)
 
         # shape: N x H x W x K x V
@@ -761,9 +764,10 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
                                                     rasterized_results=[fragments, screen_coords], )[:, :3]
 
         # MLP TEXTURE SAMPLING
-        pixel_face_coords_masked = pixel_face_coords[mask]
-        pixel_uv_coords_masked = pixel_uv_coords[mask]
-        pixel_uv_ids_masked = pixel_uv_ids[mask]
+        pixel_face_coords_masked = pixel_face_coords[mask] # R x 3
+        pixel_uv_coords_masked = pixel_uv_coords[mask] # R x 2
+        pixel_uv_ids_masked = pixel_uv_ids[mask] # R
+        pix_subject_id_masked = pix_subject_id[mask[..., 0]] # R
 
         if getattr(self, "n_upsample", 1) != 1:
             rendered_normals = torchvision.transforms.functional.resize(rendered_normals, (
@@ -780,10 +784,10 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         pixel_normal_encoding = pixel_normal_encoding.unsqueeze(-2).expand(-1, -1, -1, faces_per_pix,
                                                                            -1)  # N x H x W x K x D
         pixel_normal_encoding_masked = pixel_normal_encoding[mask]
-        pixel_expl_features_masked = self._explFeatures(pixel_uv_coords_masked.view(1, 1, -1, 2),
-                                                        pixel_uv_ids_masked.view(1, 1, -1), video_id)
-        pixel_expl_features_masked = pixel_expl_features_masked[0, :, 0, :].permute(1, 0)
-        static_mlp_conditions_masked = torch.cat((pixel_face_coords_masked, pixel_expl_features_masked), dim=-1)
+        pixel_expl_features_masked = self._explFeatures(pixel_uv_coords_masked,
+                                                        pixel_uv_ids_masked, pix_subject_id_masked) # C x R
+        pixel_expl_features_masked = pixel_expl_features_masked.permute(1, 0)
+        static_mlp_conditions_masked = torch.cat((pixel_face_coords_masked, pixel_expl_features_masked), dim=-1) # R x (C + 3)
         n_masked = torch.arange(N).view(N, 1, 1, 1).expand(N, H, W, faces_per_pix)[mask]
         region_weights_masked = region_weights[mask]  # N' x 3
         frequencies_masked = torch.sum(frequencies[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
@@ -1474,6 +1478,8 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
             "expr_reg": expr_reg,
             "pose_reg": pose_reg,
             "surface_reg": surface_reg,
+            "surface_area_reg": surface_area_reg,
+            "curvature_reg": curvature_reg,
             "iou": total_iou,
             "semantic_loss_ear": sem_ear,
             "semantic_iou_ear": iou_ear,
@@ -1809,7 +1815,7 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
                 interesting_samples = [dataset[i] for i in np.linspace(0, len(dataset), 4).astype(int)[1:3]]
             vis_batch = dict_2_device(stack_dicts(*interesting_samples), self.device)
             vis_batch = self.prepare_batch(vis_batch)
-            self._visualize_head(vis_batch, max_samples=2, title=stage)
+            self._visualize_head(vis_batch, max_samples=self.hparams["image_log_head_num"], title=stage)
 
         return loss
 
@@ -1827,8 +1833,9 @@ class NHAMultipleVideoOptimizer(pl.LightningModule):
         batch = self.prepare_batch(batch)
 
         with torch.set_grad_enabled(self.fit_residuals):
-            self.step(batch, batch_idx, stage="val")
+            step_result = self.step(batch, batch_idx, stage="val")
         self.fit_residuals = False
+        return step_result
 
     @torch.no_grad()
     def _visualize_head(self, batch, max_samples=5, title=f"flame_fit"):
