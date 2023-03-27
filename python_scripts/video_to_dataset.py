@@ -296,15 +296,23 @@ class Video2DatasetConverter:
         crop_box = self._get_aggregate_bbox(bboxes, height, width)
         return crop_box
 
-    def _load_frames(self, frames):
+    def _load_frames(self, frames=None, format='torch'):
+        if frames is None:
+            frames = self._get_frame_list()
         imgs = []
         for frame in frames:
-            img = ttf.to_tensor(Image.open(str(frame)))
+            if format == 'torch':
+                img = ttf.to_tensor(Image.open(str(frame)))
+            elif format == 'numpy':
+                img = np.array(Image.open(str(frame)))
+            if len(imgs) > 0 and img.shape != imgs[-1].shape:
+                raise RuntimeError("Frames from one video must have the same shape: " + str(e))
             imgs.append(img)
-        try:
+        if format == 'torch':
             imgs = torch.stack(imgs, dim=0)
-        except RuntimeError as e:
-            raise RuntimeError("Frames from one video must have the same shape: " + str(e))
+        elif format == 'numpy':
+            imgs = np.stack(imgs, axis=0)
+            
         return imgs  # (N, 3, H, W)
 
 
