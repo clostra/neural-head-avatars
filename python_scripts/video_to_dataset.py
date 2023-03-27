@@ -439,7 +439,6 @@ class Video2DatasetConverter:
 
             # crop
             if crop_face:
-                logger.info(f"Cropping the face")
                 crop_bbox = bboxes[frame_id]
                 crop_bbox_new_size = np.minimum(crop_bbox.size() * 2, [y_dim, x_dim])
                 crop_bbox = crop_bbox.resize(crop_bbox_new_size, [y_dim, x_dim])
@@ -448,7 +447,6 @@ class Video2DatasetConverter:
 
             # pad
             if pad_to_square:
-                logger.info(f"Padding to square")
                 img, padding = self._pad_to_square(img, mode="constant")
                 if pad_dims is None:
                     new_x_dim, new_y_dim = img.shape[-1], img.shape[-2]
@@ -463,9 +461,7 @@ class Video2DatasetConverter:
 
             # scale
             if scale:
-                logger.info(f"Scaling")
                 if enhance:
-                    logger.info(f"Enhancing")
                     img = self._resize_with_enhancement(img, self._scale)
                 else:
                     target_res = [
@@ -483,7 +479,6 @@ class Video2DatasetConverter:
                         "h_in": y_dim,
                         "h_out": img.shape[-2],
                     }
-            logger.info(f"Saving image size {img.shape}")
             img = ttf.to_pil_image(img)
             img.save(frame)
 
