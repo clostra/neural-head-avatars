@@ -40,7 +40,8 @@ import pickle
 import torch.nn.functional as F
 
 logger = get_logger(__name__)
-FLAME_ASSETS = os.path.join(os.path.abspath(os.path.dirname(os.path.dirname(nha.__file__))), 'assets/flame')
+ASSETS = os.path.join(os.path.abspath(os.path.dirname(os.path.dirname(nha.__file__))), 'assets')
+FLAME_ASSETS = os.path.join(ASSETS, 'flame')
 FLAME_MODEL_PATH = os.path.join(FLAME_ASSETS, 'generic_model.pkl')
 FLAME_MESH_MOUTH_PATH = os.path.join(FLAME_ASSETS, 'head_template_mesh_mouth.obj')
 FLAME_PARTS_MOUTH_PATH = os.path.join(FLAME_ASSETS, 'FLAME_masks_mouth.pkl')
@@ -74,6 +75,7 @@ def rot_mat_to_euler(rot_mats):
     sy = torch.sqrt(rot_mats[:, 0, 0] * rot_mats[:, 0, 0] +
                     rot_mats[:, 1, 0] * rot_mats[:, 1, 0])
     return torch.atan2(-rot_mats[:, 2, 0], sy)
+
 
 
 class FlameHead(nn.Module):

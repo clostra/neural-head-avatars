@@ -1,5 +1,8 @@
 from nha.models.texture import MultiTexture
-from nha.models.flame import *
+from nha.models.flame import ASSETS, FlameHead, \
+    FLAME_LOWER_NECK_FACES_PATH, FLAME_N_SHAPE, FLAME_N_EXPR, \
+    FLAME_MESH_MOUTH_PATH, FLAME_MODEL_PATH, FLAME_PARTS_MOUTH_PATH
+
 from nha.models.offset_mlp import OffsetMLP
 from nha.models.texture_mlp import NormalEncoder, TextureMLP
 from nha.optimization.criterions import LeakyHingeLoss, MaskedCriterion
@@ -48,6 +51,7 @@ import torchvision
 import pytorch_lightning as pl
 import json
 import numpy as np
+import os
 
 logger = get_logger(__name__)
 
@@ -223,7 +227,7 @@ class NHAOptimizer(pl.LightningModule):
         self._leaky_hinge = LeakyHingeLoss(0.0, 1.0, 0.3)
         self._masked_L1 = MaskedCriterion(torch.nn.L1Loss(reduction="none"))
 
-        if Path("assets/InsightFace/backbone.pth").exists():
+        if Path(os.path.join(ASSETS, "InsightFace/backbone.pth")).exists():
             self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())  # don't store perc_loss weights as model weights
         else:
             self._perceptual_loss = None

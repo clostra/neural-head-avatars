@@ -6,10 +6,12 @@ from torchvision import models
 from torchvision.transforms import Normalize
 from collections import namedtuple
 import sys
+import os
 from pathlib import Path
 
 sys.path.append(str((Path(__file__).parents[2]/"deps")))
 from InsightFace.recognition.arcface_torch.backbones import get_model
+from nha.models.flame import ASSETS
 
 
 class VGG16(torch.nn.Module):
@@ -105,7 +107,7 @@ def gram_matrix(y):
 class ResNetLOSS(torch.nn.Module):
     def __init__(self, criterion=torch.nn.L1Loss(reduction='mean')):
         super(ResNetLOSS, self).__init__()
-        self.model = ResNet18("assets/InsightFace/backbone.pth")
+        self.model = ResNet18(os.path.join(ASSETS, "InsightFace/backbone.pth"))
         self.model.eval()
         self.criterion = criterion
         self.criterion.reduction = "mean"
