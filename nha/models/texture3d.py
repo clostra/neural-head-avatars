@@ -22,27 +22,31 @@ class MultiSubjectMultiTexture(nn.Module):
 
         super().__init__()
         self.maps = nn.ParameterList([nn.Parameter(t, requires_grad=True) for t in texture_maps])
-        self.C = texture_maps[0].shape[0]
+        self.C = texture_maps[0].shape[1]
 
     def forward(self, uv_coords, uv_idcs, subject_id):
         """
         uv_coords of shape
-        :param uv_coords: N x H x W x 2 normalized to -1, ... +1
-        :param uv_idcs: N x H x W
-        :param subject_id: N
-        :return: N x C x H x W
+        :param uv_coords: R x 2 normalized to -1, ... +1
+        :param uv_idcs: R
+        :param subject_id: R
+        :return: C x R
         """
 
-        assert len(uv_coords.shape) == 4
-        assert len(uv_idcs.shape) == 3
-        assert uv_coords.shape[:-1] == uv_idcs.shape
+        assert len(uv_coords.shape) == 2
+        assert len(uv_idcs.shape) == 1
 
-        N, H, W, _ = uv_coords.shape
-        ret = torch.zeros(N, H, W, self.C, device=uv_coords.device, dtype=uv_coords.dtype)
+        R, _ = uv_coords.shape
+        ret = torch.zeros(R, self.C, device=uv_coords.device, dtype=uv_coords.dtype)
+        uv_subj_coords = torch.cat((uv_coords, subject_id[:, None]), -1) # R x 3
         for i, map in enumerate(self.maps):
-            mask = (uv_idcs == i)
-            ret[mask] = F.grid_sample(map[subject_id], uv_coords[mask].view(1, 1, -1, 2),
-                                      padding_mode="border", align_corners=True)[0, :, 0, :].permute(1, 0)
+            mask = (uv_idcs == i) # R
+            ret[mask] = F.grid_sample(
+                map.permute(1, 0, 2, 3)[None],   # 1 x C x M x H x W
+                uv_subj_coords[None, None, None, mask],   # 1 x 1 x 1 x R' x 3
+                padding_mode="border",
+                align_corners=True # 1 x C x 1 x 1 x R'
+            )[0, :, 0, 0].permute(1, 0)
 
-        return ret.permute(0, 3, 1, 2)
+        return ret.permute(1, 0)
 
