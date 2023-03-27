@@ -46,9 +46,12 @@ class BBox:
         ))
     def __repr__(self):
         return f"BBox({self.begin.tolist()}, {self.end.tolist()})"
-    
+   
     def to_slice(self):
         return tuple([
             slice(a, b)
             for a, b in self._bbox.T
         ])
+
+    def from_center(self, center, size, grid_shape):
+        return BBox(center, center).resize(size, grid_shape)
