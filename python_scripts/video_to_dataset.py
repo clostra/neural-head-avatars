@@ -1117,7 +1117,7 @@ def make_dataset_video(
     lmk_scatter_obj = None
     def init():
         sample = data[0]
-        img = ttf.to_pil_image(rgb * 0.5 + 0.5)
+        img = ttf.to_pil_image(sample["rgb"] * 0.5 + 0.5)
         img_imshow_obj = axes[0].imshow(img)
         if load_seg:
             seg_imshow_obj = axes[1].imshow(sample["seg"].float()[0])
@@ -1137,7 +1137,7 @@ def make_dataset_video(
             normal_imshow_obj = axes[4].imshow(normals.numpy())
     def update(i):
         sample = data[i]
-        img = ttf.to_pil_image(rgb * 0.5 + 0.5)
+        img = ttf.to_pil_image(sample["rgb"] * 0.5 + 0.5)
         img_imshow_obj.set_data(img)
         if load_seg:
             seg_imshow_obj.set_data(sample["seg"].float()[0])
