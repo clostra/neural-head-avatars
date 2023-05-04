@@ -622,9 +622,22 @@ class Video2DatasetConverter:
         fa = self._get_face_alignment()
         frames = self._get_frame_list()
         imgs = self._load_frames(frames, format='torch')
+        scale_factor = 1
+        # if the image is too large, downscale it
+        if max(imgs.shape[2:]) > 500:
+            target_size = 256
+            scale_factor = float(target_size / max(imgs.shape[2:]))
+            target_res = int(imgs.shape[2] * scale_factor), int(imgs.shape[3] * scale_factor)
+            imgs = ttf.resize(
+                imgs, target_res, InterpolationMode.BILINEAR, antialias=True
+            )
+
         bbox_lists = []
-        for imgs_chunk in imgs.split(batch_size, dim=0):
-            bbox_lists += fa.face_detector.detect_from_batch(imgs_chunk * 255)
+        for i in range(0, len(imgs), batch_size):
+            cur_bbox_list = fa.face_detector.detect_from_batch(imgs[i:i+batch_size] * 255)
+            # divide by scale factor to get the original image size
+            cur_bbox_list = [[bbox / scale_factor for bbox in frame_bboxes] for frame_bboxes in cur_bbox_list]
+            bbox_lists += cur_bbox_list
 
         for bbox in bbox_lists:
             if len(bbox) == 0:
