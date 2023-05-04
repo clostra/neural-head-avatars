@@ -1103,12 +1103,6 @@ def make_dataset_video(
     ):
     out_path = Path(out_path)
 
-    ignore_frames_path = out_path / "ignore_frames.json"
-    if ignore_frames_path.exists():
-        with open(str(ignore_frames_path), 'r') as f:
-            ignore_frames = json.load(f)['ignore_frames']
-    else:
-        ignore_frames = []
 
     data_path = out_path
 
@@ -1120,7 +1114,14 @@ def make_dataset_video(
         load_parsing=load_parsing,
     )
 
-    N = len(data)
+    ignore_frames_path = out_path / "ignore_frames.json"
+    if ignore_frames_path.exists():
+        with open(str(ignore_frames_path), 'r') as f:
+            ignore_frames = json.load(f)['ignore_frames']
+            non_ignore_frames = list(set(range(len(data))) - set(ignore_frames))
+    else:
+        non_ignore_frames = list(range(len(data)))
+
     fig, axes = plt.subplots(1, 5, figsize=(16, 3))
     sample = data[0]
     img = ttf.to_pil_image(sample["rgb"] * 0.5 + 0.5)
@@ -1169,7 +1170,8 @@ def make_dataset_video(
             artists.append(normal_imshow_obj)
         return artists
         
-    ani = FuncAnimation(fig, update, frames=np.arange(len(data)),
+    logger.info("Creating dataset.mp4")
+    ani = FuncAnimation(fig, update, frames=non_ignore_frames,
                             blit=True, interval = 1000 / 30)
     writer = FFMpegWriter(fps=30)
     ani.save(data_path / "dataset.mp4", writer=writer)
