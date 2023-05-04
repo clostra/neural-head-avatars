@@ -946,7 +946,7 @@ class Video2DatasetConverter:
 
         normalize_img = Compose(
             [
-                Normalize(-1, 2),
+                # Normalize(-1, 2), I'M PRETTY SURE THIS SHOULDN'T BE HERE
                 Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
             ]
         )
