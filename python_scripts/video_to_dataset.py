@@ -308,7 +308,7 @@ class Video2DatasetConverter:
             elif format == 'numpy':
                 img = np.array(Image.open(str(frame)))
             if len(imgs) > 0 and img.shape != imgs[-1].shape:
-                raise RuntimeError("Frames from one video must have the same shape: " + str(e))
+                raise RuntimeError("Frames from one video must have the same shape")
             imgs.append(img)
         if format == 'torch':
             imgs = torch.stack(imgs, dim=0)
