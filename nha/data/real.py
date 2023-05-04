@@ -672,7 +672,7 @@ class MultipleVideosDataModule(pl.LightningModule):
         data_path,
         train_size=0.8,
         tracking_results_filename=None,
-        video_selection_path=None,
+        video_paths=None,
         train_batch_size=64,
         validation_batch_size=64,
         data_worker=8,
@@ -708,11 +708,13 @@ class MultipleVideosDataModule(pl.LightningModule):
         self._val_batch = validation_batch_size
         self._workers = data_worker
         self._tracking_results_filename = tracking_results_filename
-        self._video_selection_path = video_selection_path
         self._train_set = None
         self._val_set = None
         self._video_to_id = None
-        self._video_paths = None
+        if video_paths is not None:
+            self._video_paths = [Path(p) for p in video_paths]
+        else:
+            self._video_paths = None
         self._train_size = train_size
         self._load_components = dict(
             load_bbx=load_bbx,
@@ -773,11 +775,7 @@ class MultipleVideosDataModule(pl.LightningModule):
         return sorted(list((self._path / video_name).glob("frame_*")))
 
     def _init_videos(self):
-        if self._video_selection_path is not None:
-            with open(str(self._video_selection_path), 'r') as f:
-                video_names = json.load(f)['video_names']
-            self._video_paths = [self._path / video_name for video_name in video_names]
-        else:
+        if self._video_paths is None:
             self._video_paths = list(self._path.iterdir())
         self._video_paths = sorted(self._video_paths)
         self._video_to_id = {video_path.name: i for i, video_path in enumerate(self._video_paths)}
