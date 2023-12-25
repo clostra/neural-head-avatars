@@ -148,30 +148,43 @@ class Video2DatasetConverter:
         self._data_path.mkdir(parents=True, exist_ok=True)
         self._ignore_frames = set()
 
+    def _generate_frames(self):
+        # Generator function that iterates over all frame arrays
+        # Works if self._video_path is a video file or a directory with frames
+
+        if self._video_path.suffix in [".mp4", ".avi"]:
+            cap = cv2.VideoCapture(str(self._video_path))
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if ret:
+                    yield frame
+                else:
+                    break
+            cap.release()
+        elif self._video_path.is_dir():
+            filepaths = list(self._video_path.iterdir())
+            filepaths = [f for f in filepaths if f.suffix in self.IMAGE_EXTENSIONS]
+            filepaths = sorted(filepaths, key=lambda k: str(k))
+            for filepath in filepaths:
+                yield cv2.imread(str(filepath))
+        else:
+            raise ValueError(
+                f"Video path {self._video_path} is neither a video file nor a directory"
+            )
+
     def extract_frames(self):
         """
         Unpacks every frame of the video into a separate folder dataset_path/frame_xxx/image_0.png
         :return:
         """
-        cap = cv2.VideoCapture(str(self._video_path))
-        count = 0
-
+        # use the new frame generator
         logger.info("Extracting all frames")
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if ret:
-                logger.info(f"Extracting frame {count:04d}")
+        for i, frame in enumerate(self._generate_frames()):
+            frame_dir = self._data_path / f"frame_{i:04d}"
+            frame_dir.mkdir(exist_ok=True)
 
-                frame_dir = self._data_path / f"frame_{count:04d}"
-                frame_dir.mkdir(exist_ok=True)
-
-                img_file = frame_dir / Video2DatasetConverter.IMAGE_FILE_NAME
-                cv2.imwrite(str(img_file), frame)
-                count = count + 1
-
-            else:
-                break
-        cap.release()
+            img_file = frame_dir / Video2DatasetConverter.IMAGE_FILE_NAME
+            cv2.imwrite(str(img_file), frame)
 
     def _get_frame_list(self):
         """
