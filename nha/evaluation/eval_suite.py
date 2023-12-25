@@ -21,7 +21,8 @@ class Evaluator:
 
     def __init__(
         self,
-        metrics=["L1", "L2", "PSNR", "MS_SSIM", "LMK", "LPIPS", "CPBD"],
+        # metrics=["L1", "L2", "PSNR", "MS_SSIM", "LMK", "LPIPS", "CPBD"],
+        metrics=["L1", "L2", "PSNR", "MS_SSIM", "LMK", "LPIPS"],
         device="cuda",
         load_bbx_detector=False,
     ):
@@ -111,7 +112,8 @@ def evaluate_models(
     models: OrderedDict,
     dataloader,
     optimizer_module,
-    metrics=["L1", "L2", "PSNR", "MS_SSIM", "LMK", "LPIPS", "CPBD"],
+    # metrics=["L1", "L2", "PSNR", "MS_SSIM", "LMK", "LPIPS", "CPBD"],
+    metrics=["L1", "L2", "PSNR", "MS_SSIM", "LMK", "LPIPS"],
     blur_seg=0.0,
 ):
     """
