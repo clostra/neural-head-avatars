@@ -30,7 +30,6 @@ from fdlite import (
     IrisLandmark,
     iris_roi_from_face_landmarks,
 )
-from gfpgan import GFPGANer
 
 this_file = Path(__file__)
 nha_repo_path = this_file.parent.parent
@@ -112,6 +111,7 @@ class Video2DatasetConverter:
     SEG_FILE_NAME = "seg_0000.png"
     PARSING_FILE_NAME = "parsing_0000.png"
     NORMAL_FILE_NAME = "normals_0000.png"
+    IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg"]
 
     fa = None
     parsing_model = None
@@ -550,11 +550,12 @@ class Video2DatasetConverter:
     def _get_face_alignment(cls):
         if cls.fa is None:
             cls.fa = face_alignment.FaceAlignment(
-                face_alignment.LandmarksType._3D, flip_input=True, device="cuda"
+                face_alignment.LandmarksType.THREE_D, flip_input=True, device="cuda"
             )
         return cls.fa
     @classmethod
     def _get_face_enhancer(cls, scale_factor):
+        from gfpgan import GFPGANer
         if cls.face_enhancer is None:
             cls.face_enhancer = GFPGANer(
                 model_path='https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth',
@@ -1198,7 +1199,7 @@ def create_dataset(args):
         args.keep_original_frames,
     )
     converter.extract_frames()
-    converter.apply_transforms(crop_face=True, pad_to_square=False)
+    converter.apply_transforms(crop_face=True, pad_to_square=False, enhance=False)
     converter.annotate_landmarks()
     converter.annotate_parsing()
     converter.annotate_segmentation()
