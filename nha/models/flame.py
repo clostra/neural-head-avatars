@@ -40,7 +40,7 @@ import pickle
 import torch.nn.functional as F
 
 logger = get_logger(__name__)
-ASSETS = os.path.join(os.path.abspath(os.path.dirname(os.path.dirname(nha.__file__))), 'assets')
+ASSETS = os.path.join(os.path.abspath("."), 'assets')
 FLAME_ASSETS = os.path.join(ASSETS, 'flame')
 FLAME_MODEL_PATH = os.path.join(FLAME_ASSETS, 'generic_model.pkl')
 FLAME_MESH_MOUTH_PATH = os.path.join(FLAME_ASSETS, 'head_template_mesh_mouth.obj')
@@ -811,6 +811,7 @@ class FlameHead(nn.Module):
                 jaw,
                 eyes,
                 offsets=None,
+                scale = None,
                 translation=None,
                 zero_centered=True,
                 use_rotation_limits=True,
@@ -831,6 +832,9 @@ class FlameHead(nn.Module):
         dtype = self._v_template.dtype
         N = len(shape)
         batch_size = shape.shape[0]
+
+        if scale is None:
+            scale = 1
 
         # apply limits to joint rotations
         if use_rotation_limits:
@@ -862,6 +866,8 @@ class FlameHead(nn.Module):
         if zero_centered:
             vertices = vertices - J[:, [0]]
             J = J - J[:, [0]]
+
+        vertices = vertices * scale
 
         if translation is not None:
             vertices = vertices + translation[:, None, :]
