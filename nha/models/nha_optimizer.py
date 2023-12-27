@@ -1489,14 +1489,16 @@ class NHAOptimizer(pl.LightningModule):
             rendered_semantics=semantic_pred,
             rasterized_results=raster_res,
         )
+        loss_weights = self.get_current_lrs_n_lossweights()
 
         lmk_loss = self._compute_lmk_loss(batch, pred_lmks)
 
-        if self.hparams['mesh'] is not None:
+        if loss_weights["w_chamfer"] != 0:
             chamfer_loss = self._compute_mesh_guidance_energy(offsets_verts, self.hparams['mesh_guidance_margin'])
         else:
             chamfer_loss = 0
-        if 'depth' in batch:
+        
+        if loss_weights["w_panohead_depth"] != 0:
             depth_guidance_loss = self._compute_depth_guidance_loss(batch['depth'], raster_res[0].zbuf, batch['parsing'])
         else:
             depth_guidance_loss = 0
@@ -1508,7 +1510,6 @@ class NHAOptimizer(pl.LightningModule):
         edge_loss = self._compute_edge_length_loss(offsets_verts)
         shape_reg, expr_reg, pose_reg = self._compute_flame_reg_losses(batch)
 
-        loss_weights = self.get_current_lrs_n_lossweights()
 
         total_loss = loss_weights["w_norm"] * normal_loss + loss_weights["w_lap"] * lap_loss + \
                      loss_weights["w_silh"] * silh_loss + loss_weights["w_edge"] * edge_loss + \
