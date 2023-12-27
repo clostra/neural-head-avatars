@@ -89,7 +89,7 @@ def create_camera_objects(K, RT, resolution, device):
     f = torch.stack((K[:, 0, 0], K[:, 1, 1]), dim=-1)
     principal_point = torch.cat([K[:, [0], -1], H - K[:, [1], -1]], dim=1)
     cameras = PerspectiveCameras(
-        R=R,
+        R=R.transpose(1, 2),
         T=T,
         principal_point=principal_point,
         focal_length=f,
