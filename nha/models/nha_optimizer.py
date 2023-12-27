@@ -1903,6 +1903,8 @@ class NHAOptimizer(pl.LightningModule):
     def _visualize_head(self, batch, max_samples=5, title=f"flame_fit"):
         rgba_pred = self.forward(batch, symmetric_rgb_range=False)
         shaded_pred = self.predict_shaded_mesh(batch)
+        if self.hparams["mesh"] is not None:
+            shaded_mesh_guidance = self.render_guidance_mesh(batch)
 
         N = min(max_samples, batch["rgb"].shape[0])
 
@@ -1910,8 +1912,12 @@ class NHAOptimizer(pl.LightningModule):
         rgb_gt = rgb_gt[:N] * 0.5 + 0.5
         rgb_pred = rgba_pred[:N, :3]
         shaded_pred = shaded_pred[:N, :3]
+        if self.hparams["mesh"] is not None:
+            shaded_mesh_guidance = shaded_mesh_guidance[:N, :3]
 
         images = torch.cat([rgb_gt, rgb_pred, shaded_pred], dim=0)
+        if self.hparams["mesh"] is not None:
+            images = torch.cat([images, shaded_mesh_guidance], dim=0)
         log_img = torchvision.utils.make_grid(images, nrow=N)
         self.logger.experiment.add_image(title + "prediction", log_img, self.current_epoch)
 
@@ -1998,6 +2004,19 @@ class NHAOptimizer(pl.LightningModule):
             faces=self._flame.faces[None].expand(len(offsets_verts), -1, -1),
             textures=tex,
         )
+
+        return render_shaded_mesh(mesh, K, RT, (H, W), self.device, light_colors)
+
+    def render_guidance_mesh(self, batch, tex_color=np.array((188, 204, 245)) / 255, light_colors=(0.4, 0.6, 0.3)):
+        K = batch["cam_intrinsic"]
+        RT = batch["cam_extrinsic"]
+        H, W = batch["rgb"].shape[-2:]
+
+        # define meshes and textures
+        mesh = self._guidance_meshes.extend(len(batch["rgb"])).to(self.device)
+        vertex_colors = torch.ones_like(mesh.verts_padded()) * torch.tensor(tex_color, device=self.device).float().view(1, 3)
+        tex = TexturesVertex(vertex_colors)
+        mesh.textures = tex
 
         return render_shaded_mesh(mesh, K, RT, (H, W), self.device, light_colors)
 
