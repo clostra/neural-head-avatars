@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, '.')
 from nha.util.log import get_logger
 from nha.data.real import RealDataset, CLASS_IDCS, frame2id, SEGMENTATION_LABELS
 from nha.util.general import get_mask_bbox
@@ -18,7 +20,6 @@ import json
 import subprocess
 import shutil
 import imageio
-import sys
 import torch
 import matplotlib.pyplot as plt
 import matplotlib.path as mpltPath

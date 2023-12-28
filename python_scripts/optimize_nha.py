@@ -1,3 +1,6 @@
+import sys
+sys.path.insert(0, '.')
+
 from nha.optimization.train_pl_module import train_pl_module
 from nha.util.log import get_logger
 from nha.data.real import RealDataModule
