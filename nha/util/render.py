@@ -118,7 +118,7 @@ def render_shaded_mesh(mesh, K, RT, image_size, device, light_colors=(0.4, 0.6, 
             ambient_color=[[light_colors[0]] * 3],
             diffuse_color=[[light_colors[1]] * 3],
             specular_color=[[light_colors[2]] * 3],
-            direction=[[0, 1, -1]],
+            direction=[[0, -1, 1]],
             device=device,
         )
         # define renderer
