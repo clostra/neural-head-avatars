@@ -73,7 +73,7 @@ class EuclLmkDistance(Metric):
 
     def __init__(self, device='cuda'):
         super().__init__(Metric.OPTIMUM_MIN, device)
-        self.fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._2D,
+        self.fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D,
                                                flip_input=False,
                                                device=device)
 
