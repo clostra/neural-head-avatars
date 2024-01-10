@@ -73,6 +73,18 @@ def normalize_image_points(u, v, resolution):
     v = 2 * (v - resolution[0] / 2.0) / resolution[0]
     return u, v
 
+def unnormalize_image_points(u, v, resolution):
+    """
+    normalizes u, v coordinates from [-1, 1] to [0 ,image_size]
+    :param u:
+    :param v:
+    :param resolution:
+    :return:
+    """
+    u = (u * resolution[1] / 2.0) + resolution[1] / 2.0
+    v = (v * resolution[0] / 2.0) + resolution[0] / 2.0
+    return u, v
+
 
 def create_camera_objects(K, RT, resolution, device):
     """

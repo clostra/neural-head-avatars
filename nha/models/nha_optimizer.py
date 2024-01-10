@@ -8,6 +8,7 @@ from nha.optimization.holefilling_segmentation_loss import calc_holefilling_segm
 from nha.data.real import CLASS_IDCS, digitize_segmap
 from nha.util.render import (
     normalize_image_points,
+    unnormalize_image_points,
     batch_project,
     create_camera_objects,
     hard_feature_blend,
@@ -24,6 +25,7 @@ from nha.util.general import (
     IoU,
     NoSubmoduleWrapper,
     stack_dicts,
+    imshow_return_array
 )
 from nha.util.screen_grad import screen_grad
 from nha.util.log import get_logger
@@ -52,6 +54,7 @@ import pytorch_lightning as pl
 import json
 import numpy as np
 import trimesh
+import cv2
 
 logger = get_logger(__name__)
 
@@ -1901,7 +1904,21 @@ class NHAOptimizer(pl.LightningModule):
 
     @torch.no_grad()
     def _visualize_head(self, batch, max_samples=5, title=f"flame_fit"):
-        rgba_pred = self.forward(batch, symmetric_rgb_range=False)
+        K = batch["cam_intrinsic"]
+        RT = batch["cam_extrinsic"]
+        H, W = batch["rgb"].shape[-2:]
+
+        flame_params_offsets = self._create_flame_param_batch(batch)
+        offsets_verts, pred_lmks, mouth_conditioning = self._forward_flame(flame_params_offsets, return_mouth_conditioning=True)
+        cameras = create_camera_objects(K, RT, (H, W), self.device)
+        flame_meshes = Meshes(verts=offsets_verts, faces=self._flame.faces[None].expand(len(offsets_verts), -1, -1))
+        expr = flame_params_offsets["expr"]
+        pose = torch.cat((flame_params_offsets["rotation"], flame_params_offsets["neck"], flame_params_offsets["jaw"],
+                          flame_params_offsets["eyes"]), dim=1)
+
+        rasterized_results = self._rasterize(flame_meshes, cameras, (H, W))
+
+        rgba_pred = self._render_rgba(offsets_verts, K, RT, H, W, expr=expr, pose=pose, mouth_cond=mouth_conditioning, rasterized_results=rasterized_results)
         shaded_pred = self.predict_shaded_mesh(batch)
         if self.hparams["mesh"] is not None:
             shaded_mesh_guidance = self.render_guidance_mesh(batch)
@@ -1915,11 +1932,57 @@ class NHAOptimizer(pl.LightningModule):
         if self.hparams["mesh"] is not None:
             shaded_mesh_guidance = shaded_mesh_guidance[:N, :3]
 
+
+        # Renders
         images = torch.cat([rgb_gt, rgb_pred, shaded_pred], dim=0)
         if self.hparams["mesh"] is not None:
             images = torch.cat([images, shaded_mesh_guidance], dim=0)
         log_img = torchvision.utils.make_grid(images, nrow=N)
         self.logger.experiment.add_image(title + "prediction", log_img, self.current_epoch)
+
+        # Landmarks
+        rgb_gt_circles = rgb_gt.clone().permute(0, 2, 3, 1).cpu().numpy().copy()
+        lmks_gt = batch["lmk2d"].cpu().numpy()
+        proj_pred_lmks = batch_project(pred_lmks, K, RT, (H, W), self.device, normalize=True)
+        img_pred_lmks = proj_pred_lmks.clone()
+        img_pred_lmks[..., 0], img_pred_lmks[..., 1] = unnormalize_image_points(img_pred_lmks[..., 0], img_pred_lmks[..., 1], (H, W)) 
+
+        for i in range(len(rgb_gt)):
+            for x,y in lmks_gt[i][:, :2]:
+                cv2.circle(rgb_gt_circles[i], (int(x), int(y)), 3, (255, 0, 0), -1)
+            for x,y in img_pred_lmks[i][:, :2].detach().cpu().numpy():
+                cv2.circle(rgb_gt_circles[i], (int(x), int(y)), 3, (0, 0, 255), -1)
+
+        rgb_gt_circles = torch.tensor(rgb_gt_circles).permute(0, 3, 1, 2)
+        log_lmk_img = torchvision.utils.make_grid(rgb_gt_circles, nrow=N)
+        self.logger.experiment.add_image(title + "lmks", log_lmk_img, self.current_epoch)
+
+        # Parsing
+        prediction, _ = self._render_semantics(
+            offsets_verts,
+            K,
+            RT,
+            H,
+            W,
+            rasterized_results=rasterized_results,
+            return_rasterizer_results=True,
+            return_confidence=True,
+        )
+        semantics_pred = prediction[:, : len(self.semantic_labels)]
+        semantics_pred = torch.from_numpy(np.stack([
+            imshow_return_array(img.argmax(0).cpu().numpy())
+            for img in semantics_pred
+        ])).permute(0, 3, 1, 2)
+        parsing_gt = torch.from_numpy(np.stack([
+            imshow_return_array(img[0].cpu().numpy())
+            for img in batch["parsing"]
+        ])).permute(0, 3, 1, 2)
+        parsing = torch.cat((parsing_gt, semantics_pred), dim=0)
+        log_parsing_img = torchvision.utils.make_grid(parsing, nrow=N)
+        self.logger.experiment.add_image(title + "parsing", log_parsing_img, self.current_epoch)
+            
+
+
 
     def forward(self, batch, ignore_expr=False, ignore_pose=False, center_prediction=False, symmetric_rgb_range=True):
         """

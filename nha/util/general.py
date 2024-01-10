@@ -7,8 +7,35 @@ from nha.util.log import get_logger
 from typing import *
 import matplotlib.pyplot as plt
 from torchvision.transforms.functional import gaussian_blur
+import matplotlib.pyplot as plt
 
 logger = get_logger(__name__)
+
+def imshow_return_array(image):
+    height, width, *_ = image.shape
+    dpi = 100
+    # Create a figure and axis
+    fig, ax = plt.subplots(1, figsize=(width / dpi, height / dpi), dpi=dpi)
+    
+    # Display the image
+    ax.imshow(image)
+    ax.axis('off')  # Turn off axis
+    ax.set_xlim(0, width - 1)
+    ax.set_ylim(height - 1, 0)
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0, wspace=0, hspace=0)
+
+    # Draw the canvas and cache the renderer
+    fig.canvas.draw()
+
+    # Convert canvas to an image
+    image_flat = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+    w, h = fig.canvas.get_width_height()
+    image_array = image_flat.reshape((h, w, 3))
+
+    # Close the plot display
+    plt.close(fig)
+
+    return image_array
 
 
 class NoSubmoduleWrapper:
