@@ -453,11 +453,13 @@ class NHAOptimizer(pl.LightningModule):
         p["shape"] = p["shape"] + batch.get("flame_shape", 0)
         p["expr"] = p["expr"] + batch.get("flame_expr", 0)
         p["translation"] = p["translation"] + batch.get("flame_trans", 0)
-        p["rotation"] = p["rotation"] + batch["flame_pose"][:, :3]
-        p["neck"] = p["neck"] + batch["flame_pose"][:, 3:6]
-        p["jaw"] = p["jaw"] + batch["flame_pose"][:, 6:9]
-        p["eyes"] = p["eyes"] + batch["flame_pose"][:, 9:15]
-        p["scale"] = torch.exp(self._log_scale_resid + torch.log(batch["flame_scale"][0]))
+        if "flame_pose" in batch:
+            p["rotation"] = p["rotation"] + batch["flame_pose"][:, :3]
+            p["neck"] = p["neck"] + batch["flame_pose"][:, 3:6]
+            p["jaw"] = p["jaw"] + batch["flame_pose"][:, 6:9]
+            p["eyes"] = p["eyes"] + batch["flame_pose"][:, 9:15]
+        if "flame_scale" in batch:
+            p["scale"] = torch.exp(self._log_scale_resid + torch.log(batch["flame_scale"][0]))
 
         if ignore_offsets:
             p["offsets"] = None
