@@ -447,6 +447,7 @@ class NHAOptimizer(pl.LightningModule):
             p["eyes"] = self._eyes_pose[indices]
             p["rotation"] = self._rotation[indices]
             p["translation"] = self._translation[indices]
+            p["scale"] = torch.exp(self._log_scale_resid)
 
         # adding parameters from dataset
         p["shape"] = p["shape"] + batch.get("flame_shape", 0)
