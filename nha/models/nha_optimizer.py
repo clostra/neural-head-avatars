@@ -2128,7 +2128,7 @@ class NHAOptimizer(pl.LightningModule):
     def configure_optimizers(self):
 
         # FLAME
-        flame_params = [self._shape, self._expr, self._rotation, self._jaw_pose, self._neck_pose]
+        flame_params = [self._shape, self._expr, self._rotation, self._jaw_pose, self._neck_pose, self._log_scale_resid]
 
         lrs = self.get_current_lrs_n_lossweights()
 
