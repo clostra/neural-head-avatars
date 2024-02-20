@@ -135,7 +135,7 @@ class RealDataset(Dataset):
                 raise ValueError(
                     "In order to load flame parameters, 'tracking_results_path' must be provided."
                 )
-        if load_camera:
+        if not load_threeddfa and load_camera:
             if tracking_results_path is None:
                 raise ValueError(
                     "In order to load camera parameters, 'tracking_results_path' must be provided."
@@ -346,28 +346,27 @@ class RealDataset(Dataset):
             sample['cam_intrinsic'] = self.K[i] * torch.tensor([W, H, 1]).to(self.K)[..., None]
             sample['cam_extrinsic'] = torch.linalg.inv(self.c2w[i])[:3]
             sample['cam_intrinsic'][:, :2] *= -1
-        else:
-            if self._has_camera:
-                tr = self._tracking_results
+        elif self._has_camera:
+            tr = self._tracking_results
 
-                track_h, track_w = self._tracking_resolution
-                img_h, img_w = sample["rgb"].shape[-2], sample["rgb"].shape[-1]
+            track_h, track_w = self._tracking_resolution
+            img_h, img_w = sample["rgb"].shape[-2], sample["rgb"].shape[-1]
 
-                fx_scale = max(track_h, track_w) * img_w / track_w
-                fy_scale = max(track_h, track_w) * img_h / track_h
-                cx_scale = img_w
-                cy_scale = img_h
-                if len(tr["K"].shape) == 1:
-                    sample["cam_intrinsic"] = create_intrinsics_matrix(
-                        fx=tr["K"][0] * fx_scale, # DEBUG
-                        fy=tr["K"][0] * fy_scale,
-                        px=tr["K"][1] * cx_scale,
-                        py=tr["K"][2] * cy_scale,
-                    )
-                else:
-                    assert tr["K"].shape[0] == 3 and tr["K"].shape[1] == 3
-                    sample["cam_intrinsic"] = torch.from_numpy(tr["K"]).float()
-                sample["cam_extrinsic"] = torch.from_numpy(tr["RT"]).float()
+            fx_scale = max(track_h, track_w) * img_w / track_w
+            fy_scale = max(track_h, track_w) * img_h / track_h
+            cx_scale = img_w
+            cy_scale = img_h
+            if len(tr["K"].shape) == 1:
+                sample["cam_intrinsic"] = create_intrinsics_matrix(
+                    fx=tr["K"][0] * fx_scale, # DEBUG
+                    fy=tr["K"][0] * fy_scale,
+                    px=tr["K"][1] * cx_scale,
+                    py=tr["K"][2] * cy_scale,
+                )
+            else:
+                assert tr["K"].shape[0] == 3 and tr["K"].shape[1] == 3
+                sample["cam_intrinsic"] = torch.from_numpy(tr["K"]).float()
+            sample["cam_extrinsic"] = torch.from_numpy(tr["RT"]).float()
 
         if self._has_light:
             tr = self._tracking_results
