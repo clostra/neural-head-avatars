@@ -1931,7 +1931,7 @@ class NHAOptimizer(pl.LightningModule):
 
         rgb_gt = batch["rgb"]
         rgb_gt = rgb_gt[:N] * 0.5 + 0.5
-        rgb_pred = rgba_pred[:N, :3]
+        rgb_pred = rgba_pred[:N, :3] * 0.5 + 0.5
         shaded_pred = shaded_pred[:N, :3]
         if self.hparams["mesh"] is not None:
             shaded_mesh_guidance = shaded_mesh_guidance[:N, :3]
