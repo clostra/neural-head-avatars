@@ -139,7 +139,7 @@ class NHAOptimizer(pl.LightningModule):
 
         return parser
 
-    def __init__(self, max_frame_id, w_lap, w_silh, w_semantic_hair, body_part_weights, **kwargs):
+    def __init__(self, max_frame_id, body_part_weights, **kwargs):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False
@@ -220,9 +220,9 @@ class NHAOptimizer(pl.LightningModule):
         )
 
         self._decays = {
-            "lap": DecayScheduler(*w_lap, geometric=True),
-            "semantic": DecayScheduler(*w_semantic_hair, geometric=False),
-            "silh": DecayScheduler(*w_silh, geometric=False),
+            "lap": DecayScheduler(*self.hparams["w_lap"], geometric=True),
+            "semantic": DecayScheduler(*self.hparams["w_semantic_hair"], geometric=False),
+            "silh": DecayScheduler(*self.hparams["w_silh"], geometric=False),
         }
 
         # body part weights
