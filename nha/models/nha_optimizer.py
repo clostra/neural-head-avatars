@@ -1764,7 +1764,8 @@ class NHAOptimizer(pl.LightningModule):
         # decide if the segmentation maps can be trusted --> they are noisy for profile views
         # trust segmentation only up to 30 degrees away from front view
         gaze = torch.tensor([0, 0, -1.0], device=self.device)
-        pose = batch["flame_pose"]
+        p = self._create_flame_param_batch(batch)
+        pose = torch.cat((p["rotation"], p["neck"], p["jaw"], p["eyes"]), dim=1)
         global_rot = pose[:, :3]
         neck = self._flame._apply_rotation_limit(pose[:, 3:6], self._flame.neck_limits)
         B = len(neck)
