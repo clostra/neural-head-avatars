@@ -109,7 +109,9 @@ class RealDataset(Dataset):
         """
         super().__init__()
 
-        assert not (load_threeddfa and load_reference), "Cannot load both 3ddfa and reference"
+        assert not (
+            load_threeddfa and load_reference
+        ), "Cannot load both 3ddfa and reference"
         self._path = Path(path)
         self._has_lmks = load_lmk
         self._has_flame = load_flame
@@ -247,7 +249,7 @@ class RealDataset(Dataset):
 
     def load_threeddfa_calibration(self, json_path):
         with open(json_path, "r") as f:
-            cameras = json.load(f)['labels']
+            cameras = json.load(f)["labels"]
             cameras = sorted(cameras, key=lambda x: x[0])
             cameras = [list(map(float, cam[1])) for cam in cameras]
         c = np.stack(cameras, axis=0)
@@ -256,14 +258,15 @@ class RealDataset(Dataset):
 
     def load_reference(self, npz_path):
         self.reference = np.load(npz_path)
-        c = self.reference['c']
+        c = self.reference["c"]
         self.c2w = torch.from_numpy(c[:, :16]).view(-1, 4, 4).to(torch.float32)
         self.K = torch.from_numpy(c[:, 16:]).view(-1, 3, 3).to(torch.float32)
 
-        self.depth = torch.from_numpy(self.reference['depth']).to(torch.float32)
+        self.depth = torch.from_numpy(self.reference["depth"]).to(torch.float32)
         # Remove background
         self.depth[self.depth == self.depth.max()] = -1
-        self.rgb = torch.from_numpy(self.reference['image']).to(torch.float32)
+        self.rgb = torch.from_numpy(self.reference["image"]).to(torch.float32)
+
     def __getitem__(self, i):
         """
         Get i-th sample from the dataset.
@@ -343,9 +346,11 @@ class RealDataset(Dataset):
         # camera
         if self._load_threeddfa is not None or self._load_reference is not None:
             H, W = sample["rgb"].shape[-2], sample["rgb"].shape[-1]
-            sample['cam_intrinsic'] = self.K[i] * torch.tensor([W, H, 1]).to(self.K)[..., None]
-            sample['cam_extrinsic'] = torch.linalg.inv(self.c2w[i])[:3]
-            sample['cam_intrinsic'][:, :2] *= -1
+            sample["cam_intrinsic"] = (
+                self.K[i] * torch.tensor([W, H, 1]).to(self.K)[..., None]
+            )
+            sample["cam_extrinsic"] = torch.linalg.inv(self.c2w[i])[:3]
+            sample["cam_intrinsic"][:, :2] *= -1
         elif self._has_camera:
             tr = self._tracking_results
 
@@ -358,7 +363,7 @@ class RealDataset(Dataset):
             cy_scale = img_h
             if len(tr["K"].shape) == 1:
                 sample["cam_intrinsic"] = create_intrinsics_matrix(
-                    fx=tr["K"][0] * fx_scale, # DEBUG
+                    fx=tr["K"][0] * fx_scale,  # DEBUG
                     fy=tr["K"][0] * fy_scale,
                     px=tr["K"][1] * cx_scale,
                     py=tr["K"][2] * cy_scale,
@@ -388,8 +393,8 @@ class RealDataset(Dataset):
             sample.update(self._get_eye_info(sample))
 
         if self._load_reference:
-            sample['depth'] = self.depth[i]
-            sample['rgb'] = self.rgb[i]
+            sample["depth"] = self.depth[i]
+            sample["rgb"] = self.rgb[i]
 
         return sample
 
@@ -468,7 +473,7 @@ class RealDataModule(pl.LightningDataModule):
             load_light=load_light,
             load_parsing=load_parsing,
             load_threeddfa=load_threeddfa,
-            load_reference=load_reference
+            load_reference=load_reference,
         )
 
     def setup(self, stage=None):
@@ -607,9 +612,9 @@ def tracking_results_2_data_batch(tr: dict, idcs: list, threeddfa_data=None):
     N = len(idcs)
     tr_idcs = np.array([np.where(tr["frame"] == i)[0][0] for i in idcs])
     if threeddfa_data is not None:
-    # creating batch with inputs to avatar
+        # creating batch with inputs to avatar
         with open(threeddfa_data, "r") as f:
-            cameras = json.load(f)['labels']
+            cameras = json.load(f)["labels"]
             cameras = sorted(cameras, key=lambda x: x[0])
             cameras = [list(map(float, cam[1])) for cam in cameras]
         c = np.stack(cameras, axis=0)
@@ -620,8 +625,7 @@ def tracking_results_2_data_batch(tr: dict, idcs: list, threeddfa_data=None):
         K = tr["K"]
         RT = tr["RT"][None].repeat(N, 0)
 
-
-    img_h, img_w = tr['image_size']
+    img_h, img_w = tr["image_size"]
 
     f_scale = max(img_h, img_w)
     cx_scale = img_w
@@ -633,7 +637,6 @@ def tracking_results_2_data_batch(tr: dict, idcs: list, threeddfa_data=None):
         px=K[1] * cx_scale,
         py=K[2] * cy_scale,
     )
-
 
     pose = np.concatenate(
         [
@@ -656,7 +659,7 @@ def tracking_results_2_data_batch(tr: dict, idcs: list, threeddfa_data=None):
         cam_extrinsic=torch.from_numpy(RT).float(),
         frame=torch.tensor(idcs),
         rgb=torch.zeros(N, 3, img_h, img_w),
-        flame_scale=torch.from_numpy(tr["scale"]).float()[None]
+        flame_scale=torch.from_numpy(tr["scale"]).float()[None],
     )
 
     return batch
