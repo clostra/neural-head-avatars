@@ -2137,7 +2137,7 @@ class NHAOptimizer(pl.LightningModule):
             {"params": flame_params},
             {"params": [self._translation], "lr": lrs["trans_lr"]},
         ]
-        flame_optim = torch.optim.SGD(params, lr=lrs["flame_lr"])
+        flame_optim = torch.optim.Adam(params, lr=lrs["flame_lr"])
 
         # OFFSETS
         params = [{"params": self._vert_feats}]
@@ -2160,7 +2160,7 @@ class NHAOptimizer(pl.LightningModule):
             {"params": joint_flame_params},
             {"params": [self._translation], "lr": lrs["trans_lr"]},
         ]
-        joint_flame_optim = torch.optim.SGD(params, lr=lrs["flame_lr"])
+        joint_flame_optim = torch.optim.Adam(params, lr=lrs["flame_lr"])
 
         # RESIDUALS optimizer
         resid_params = [self._expr, self._rotation, self._jaw_pose, self._neck_pose]
@@ -2168,13 +2168,13 @@ class NHAOptimizer(pl.LightningModule):
             {"params": resid_params},
             {"params": [self._translation], "lr": lrs["trans_lr"]},
         ]
-        offset_resid_optim = torch.optim.SGD(params, lr=lrs["flame_lr"])
+        offset_resid_optim = torch.optim.Adam(params, lr=lrs["flame_lr"])
 
         params = [
             {"params": resid_params + [self._eyes_pose]},
             {"params": [self._translation], "lr": lrs["trans_lr"]},
         ]
-        all_resid_optim = torch.optim.SGD(params, lr=lrs["flame_lr"])  # adds eye rotations
+        all_resid_optim = torch.optim.Adam(params, lr=lrs["flame_lr"])  # adds eye rotations
 
         return [
             {"optimizer": flame_optim},
