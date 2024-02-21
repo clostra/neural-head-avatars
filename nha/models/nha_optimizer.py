@@ -12,7 +12,7 @@ from nha.util.render import (
     batch_project,
     create_camera_objects,
     hard_feature_blend,
-    render_shaded_mesh
+    render_shaded_mesh,
 )
 from nha.util.general import (
     fill_tensor_background,
@@ -25,7 +25,7 @@ from nha.util.general import (
     IoU,
     NoSubmoduleWrapper,
     stack_dicts,
-    imshow_return_array
+    imshow_return_array,
 )
 from nha.util.screen_grad import screen_grad
 from nha.util.log import get_logger
@@ -83,30 +83,37 @@ class NHAOptimizer(pl.LightningModule):
             dict(name_or_flags="--n_normal_encoding_hidden", type=int, default=2),
             dict(name_or_flags="--flame_noise", type=float, default=0.0),
             dict(name_or_flags="--soft_clip_sigma", type=float, default=-1.0),
-
             # geometry refinement mlp settings
             dict(name_or_flags="--offset_hidden_layers", default=8, type=int),
             dict(name_or_flags="--offset_hidden_feats", default=256, type=int),
-
             # FLAME settings
             dict(name_or_flags="--subdivide_mesh", type=int, default=1),
             dict(name_or_flags="--semantics_blur", default=3, type=int, required=False),
             dict(name_or_flags="--spatial_blur_sigma", type=float, default=0.01),
-
             # training timeline settings
-            dict(name_or_flags="--epochs_offset", type=int, default=50,
-                 help="Until which epoch to train flame parameters and offsets jointly"),
-            dict(name_or_flags="--epochs_texture", type=int, default=500,
-                 help="Until which epoch to train texture while keeping model fixed"),
-            dict(name_or_flags="--epochs_joint", type=int, default=500,
-                 help="Until which epoch to train model jointly while keeping model fixed"),
+            dict(
+                name_or_flags="--epochs_offset",
+                type=int,
+                default=50,
+                help="Until which epoch to train flame parameters and offsets jointly",
+            ),
+            dict(
+                name_or_flags="--epochs_texture",
+                type=int,
+                default=500,
+                help="Until which epoch to train texture while keeping model fixed",
+            ),
+            dict(
+                name_or_flags="--epochs_joint",
+                type=int,
+                default=500,
+                help="Until which epoch to train model jointly while keeping model fixed",
+            ),
             dict(name_or_flags="--image_log_period", type=int, default=10),
-
             # lr settings
             dict(name_or_flags="--flame_lr", default=0.005, type=float, nargs=3),
             dict(name_or_flags="--offset_lr", default=0.005, type=float, nargs=3),
             dict(name_or_flags="--tex_lr", default=0.01, type=float, nargs=3),
-
             # loss weights
             dict(name_or_flags="--body_part_weights", type=str, required=True),
             dict(name_or_flags="--w_rgb", type=float, default=1, nargs=3),
@@ -131,8 +138,7 @@ class NHAOptimizer(pl.LightningModule):
             dict(name_or_flags="--w_chamfer", type=float, nargs=3),
             dict(name_or_flags="--w_panohead_depth", type=float, nargs=3),
             dict(name_or_flags="--mesh_guidance_margin", type=float),
-
-            dict(name_or_flags="--mesh", type=str), # For chamfer loss guidance
+            dict(name_or_flags="--mesh", type=str),  # For chamfer loss guidance
         ]
         for f in combi_args:
             parser.add_argument(f.pop("name_or_flags"), **f)
@@ -144,7 +150,7 @@ class NHAOptimizer(pl.LightningModule):
         self.save_hyperparameters()
         self.automatic_optimization = False
 
-        self.callbacks = [pl.callbacks.ModelCheckpoint(filename="{epoch:02d}", save_last=True)]
+        self.callbacks = [pl.callbacks.ModelCheckpoint(filename="{epoch:02d}", save_top_k=None)]
 
         # flame model
         ignore_faces = np.load(FLAME_LOWER_NECK_FACES_PATH)  # ignore lower neck faces
@@ -162,23 +168,31 @@ class NHAOptimizer(pl.LightningModule):
         )
 
         self._shape = torch.nn.Parameter(torch.zeros(1, FLAME_N_SHAPE), requires_grad=True)
-        self._expr = torch.nn.Parameter(torch.zeros(max_frame_id + 1, FLAME_N_EXPR), requires_grad=True)
+        self._expr = torch.nn.Parameter(
+            torch.zeros(max_frame_id + 1, FLAME_N_EXPR), requires_grad=True
+        )
         self._neck_pose = torch.nn.Parameter(torch.zeros(max_frame_id + 1, 3), requires_grad=True)
         self._jaw_pose = torch.nn.Parameter(torch.zeros(max_frame_id + 1, 3), requires_grad=True)
         self._eyes_pose = torch.nn.Parameter(torch.zeros(max_frame_id + 1, 6), requires_grad=True)
         self._translation = torch.nn.Parameter(torch.zeros(max_frame_id + 1, 3), requires_grad=True)
         self._rotation = torch.nn.Parameter(torch.zeros(max_frame_id + 1, 3), requires_grad=True)
-        self._log_scale_resid = torch.nn.Parameter(torch.tensor(0, dtype=torch.float), requires_grad=True)
+        self._log_scale_resid = torch.nn.Parameter(
+            torch.tensor(0, dtype=torch.float), requires_grad=True
+        )
 
         # restrict offsets to anything but eyeballs
         body_parts = self._flame.get_body_parts()
         eye_indices = np.concatenate([body_parts["left_eyeball"], body_parts["right_eyeball"]])
         indices = np.arange(len(self._flame.v_template))
         self._offset_indices = np.delete(indices, eye_indices)
-        _, face_idcs = self._flame.faces_of_verts(torch.from_numpy(self._offset_indices), return_face_idcs=True)
+        _, face_idcs = self._flame.faces_of_verts(
+            torch.from_numpy(self._offset_indices), return_face_idcs=True
+        )
         self._offset_face_indices = face_idcs
 
-        self._vert_feats = torch.nn.Parameter(torch.zeros(1, len(self._offset_indices), 32), requires_grad=True)
+        self._vert_feats = torch.nn.Parameter(
+            torch.zeros(1, len(self._offset_indices), 32), requires_grad=True
+        )
         self._vert_feats.data.normal_(0.0, 0.02)
 
         cond_feats = 9
@@ -236,7 +250,9 @@ class NHAOptimizer(pl.LightningModule):
         self._masked_L1 = MaskedCriterion(torch.nn.L1Loss(reduction="none"))
 
         if Path(os.path.join(ASSETS, "InsightFace/backbone.pth")).exists():
-            self._perceptual_loss = NoSubmoduleWrapper(ResNetLOSS())  # don't store perc_loss weights as model weights
+            self._perceptual_loss = NoSubmoduleWrapper(
+                ResNetLOSS()
+            )  # don't store perc_loss weights as model weights
         else:
             self._perceptual_loss = None
 
@@ -261,15 +277,14 @@ class NHAOptimizer(pl.LightningModule):
         self.register_buffer("mouth_conditioning_min", torch.zeros(13) - 100)
         self.register_buffer("mouth_conditioning_max", torch.zeros(13) + 100)
 
-        if self.hparams['mesh'] is not None:
-            mesh = trimesh.load(self.hparams['mesh'])
+        if self.hparams["mesh"] is not None:
+            mesh = trimesh.load(self.hparams["mesh"])
             self._guidance_meshes = Meshes(
                 verts=torch.from_numpy(mesh.vertices).float()[None],
                 faces=torch.from_numpy(mesh.faces)[None],
             )
 
     def on_train_start(self) -> None:
-
         # Copying config and body part weights to checkpoint dir
         logdir = Path(self.trainer.log_dir)
         conf_path = logdir / "config.ini"
@@ -283,17 +298,28 @@ class NHAOptimizer(pl.LightningModule):
             shutil.copy(self.hparams["split_config"], split_conf_path, follow_symlinks=True)
 
         if not body_part_weights_path.exists():
-            shutil.copy(self.hparams["body_part_weights"], body_part_weights_path, follow_symlinks=True)
+            shutil.copy(
+                self.hparams["body_part_weights"], body_part_weights_path, follow_symlinks=True
+            )
 
         # moves perceptual loss to own device
         try:
             self._perceptual_loss.to(self.device)
         except AttributeError:
-            raise AttributeError("You have to download the backbone weights for the perceptual loss. Please refer"
-                                 "to the 'Installation' section of the README")
+            raise AttributeError(
+                "You have to download the backbone weights for the perceptual loss. Please refer"
+                "to the 'Installation' section of the README"
+            )
 
         # hard setting lr
-        flame_optim, offset_optim, tex_optim, joint_flame_optim, off_resid_optim, all_resid_optim = self.optimizers()
+        (
+            flame_optim,
+            offset_optim,
+            tex_optim,
+            joint_flame_optim,
+            off_resid_optim,
+            all_resid_optim,
+        ) = self.optimizers()
 
         lrs = self.get_current_lrs_n_lossweights()
 
@@ -324,7 +350,14 @@ class NHAOptimizer(pl.LightningModule):
         if epoch is None:
             epoch = self.current_epoch
 
-        flame_optim, offset_optim, tex_optim, joint_flame_optim, off_resid_optim, all_resid_optim = self.optimizers()
+        (
+            flame_optim,
+            offset_optim,
+            tex_optim,
+            joint_flame_optim,
+            off_resid_optim,
+            all_resid_optim,
+        ) = self.optimizers()
 
         if self.fit_residuals:
             if epoch < self.hparams["epochs_offset"]:
@@ -394,8 +427,9 @@ class NHAOptimizer(pl.LightningModule):
 
         return final_offsets
 
-    def _create_flame_param_batch(self, batch, ignore_shape=False, ignore_expr=False, ignore_pose=False,
-                                  ignore_offsets=False):
+    def _create_flame_param_batch(
+        self, batch, ignore_shape=False, ignore_expr=False, ignore_pose=False, ignore_offsets=False
+    ):
         """
         adds residual para
         :param batch:
@@ -487,16 +521,18 @@ class NHAOptimizer(pl.LightningModule):
             return_landmarks="static",
             return_mouth_conditioning=return_mouth_conditioning,
         )
-        verts = flame_results['vertices']
-        lmks_static = flame_results['landmarks']
-        mouth_conditioning = flame_results.get('mouth_conditioning')
+        verts = flame_results["vertices"]
+        lmks_static = flame_results["landmarks"]
+        mouth_conditioning = flame_results.get("mouth_conditioning")
 
         if mouth_conditioning is None:
             return verts, lmks_static
         else:
             return verts, lmks_static, mouth_conditioning
 
-    def _rasterize(self, meshes, cameras, image_size, center_prediction=False, return_initial_fragments=False):
+    def _rasterize(
+        self, meshes, cameras, image_size, center_prediction=False, return_initial_fragments=False
+    ):
         """
         Rasterizes meshes using a standard rasterization approach
         :param meshes:
@@ -511,13 +547,17 @@ class NHAOptimizer(pl.LightningModule):
         eps = None
         verts_world = meshes.verts_padded()
         verts_view = cameras.get_world_to_view_transform().transform_points(verts_world, eps=eps)
-        projection_trafo = cameras.get_projection_transform().compose(cameras.get_ndc_camera_transform())
+        projection_trafo = cameras.get_projection_transform().compose(
+            cameras.get_ndc_camera_transform()
+        )
         verts_ndc = projection_trafo.transform_points(verts_view, eps=eps)
         verts_ndc[..., 2] = verts_view[..., 2]
 
         if center_prediction:
-            centers = 0.5 * (verts_ndc[..., :2].max(dim=-2, keepdim=True).values +
-                             verts_ndc[..., :2].min(dim=-2, keepdim=True).values)
+            centers = 0.5 * (
+                verts_ndc[..., :2].max(dim=-2, keepdim=True).values
+                + verts_ndc[..., :2].min(dim=-2, keepdim=True).values
+            )
             verts_ndc[..., :2] = verts_ndc[..., :2] - centers
 
         meshes_ndc = meshes.update_padded(new_verts_padded=verts_ndc)
@@ -562,21 +602,30 @@ class NHAOptimizer(pl.LightningModule):
             # left
             leye_idx = self.semantic_labels.index("left_eyeball")
             leyeregion_idx = self.semantic_labels.index("left_eye_region")
-            left_overlaps = (sem_labels[..., [0], leye_idx] > 0) & (sem_labels[..., [1], leyeregion_idx] > 0)
+            left_overlaps = (sem_labels[..., [0], leye_idx] > 0) & (
+                sem_labels[..., [1], leyeregion_idx] > 0
+            )
             # right
             reye_idx = self.semantic_labels.index("right_eyeball")
             reyeregion_idx = self.semantic_labels.index("right_eye_region")
-            right_overlaps = (sem_labels[..., [0], reye_idx] > 0) & (sem_labels[..., [1], reyeregion_idx] > 0)
+            right_overlaps = (sem_labels[..., [0], reye_idx] > 0) & (
+                sem_labels[..., [1], reyeregion_idx] > 0
+            )
 
             overlaps = (left_overlaps | right_overlaps).int()  # N x H x W x 1
 
-            pix_to_face = fragments[0][..., [0]] * (1 - overlaps) + fragments[0][..., [1]] * overlaps
+            pix_to_face = (
+                fragments[0][..., [0]] * (1 - overlaps) + fragments[0][..., [1]] * overlaps
+            )
             zbuf = fragments[1][..., [0]] * (1 - overlaps) + fragments[1][..., [1]] * overlaps
-            bary_coords = fragments[2][..., [0], :] * (1 - overlaps.unsqueeze(-1)) + \
-                          fragments[2][..., [1], :] * overlaps.unsqueeze(-1)
+            bary_coords = fragments[2][..., [0], :] * (1 - overlaps.unsqueeze(-1)) + fragments[2][
+                ..., [1], :
+            ] * overlaps.unsqueeze(-1)
             dists = fragments[3][..., [0]] * (1 - overlaps) + fragments[3][..., [1]] * overlaps
 
-            fragments = Fragments(pix_to_face=pix_to_face, zbuf=zbuf, bary_coords=bary_coords, dists=dists)
+            fragments = Fragments(
+                pix_to_face=pix_to_face, zbuf=zbuf, bary_coords=bary_coords, dists=dists
+            )
 
         # right now this only works with faces_per_pixel == 1
         pix2face, bary_coords = fragments.pix_to_face, fragments.bary_coords
@@ -619,7 +668,9 @@ class NHAOptimizer(pl.LightningModule):
         RT = batch["cam_extrinsic"]
 
         if len(verts) != len(K):
-            warnings.warn("Batch size and vertex batch size don't match. Cutting batch to have same length as verts.")
+            warnings.warn(
+                "Batch size and vertex batch size don't match. Cutting batch to have same length as verts."
+            )
             K = K[: len(verts)]
             RT = RT[: len(verts)]
 
@@ -632,7 +683,9 @@ class NHAOptimizer(pl.LightningModule):
         # RASTERIZING FRAGMENTS
         return self._rasterize(flame_meshes, cameras, (H, W))
 
-    def _render_silhouette(self, verts, K, RT, H, W, return_rasterizer_results=False, rasterized_results=None):
+    def _render_silhouette(
+        self, verts, K, RT, H, W, return_rasterizer_results=False, rasterized_results=None
+    ):
         """
         Render flame silhouette. ATTENTION: NO GRADIENT ATTACHED
         :param verts:
@@ -661,8 +714,19 @@ class NHAOptimizer(pl.LightningModule):
         else:
             return seg
 
-    def _render_normals(self, verts, K, RT, H, W, cameras=None, flame_meshes=None, faces=None,
-                        return_rasterizer_results=False, rasterized_results=None):
+    def _render_normals(
+        self,
+        verts,
+        K,
+        RT,
+        H,
+        W,
+        cameras=None,
+        flame_meshes=None,
+        faces=None,
+        return_rasterizer_results=False,
+        rasterized_results=None,
+    ):
         """
         renders tensor of normals of shape N x 3 x H x W
         :param batch:
@@ -675,7 +739,9 @@ class NHAOptimizer(pl.LightningModule):
         if cameras is None:
             cameras = create_camera_objects(K, RT, (H, W), self.device)
         if flame_meshes is None:
-            faces = faces if faces is not None else self._flame.faces[None].expand(len(verts), -1, -1)
+            faces = (
+                faces if faces is not None else self._flame.faces[None].expand(len(verts), -1, -1)
+            )
             flame_meshes = Meshes(verts=verts, faces=faces)
 
         # RASTERIZING FRAGMENTS
@@ -688,9 +754,13 @@ class NHAOptimizer(pl.LightningModule):
         # NORMAL RENDERING
         face_normals = flame_meshes.verts_normals_padded()  # N x V_max x 3
         face_normals = cameras.get_world_to_view_transform().transform_normals(face_normals)
-        face_normals = face_normals.flatten(end_dim=1)[flame_meshes.verts_padded_to_packed_idx()]  # N * V x 3
+        face_normals = face_normals.flatten(end_dim=1)[
+            flame_meshes.verts_padded_to_packed_idx()
+        ]  # N * V x 3
         face_normals = face_normals[flame_meshes.faces_packed()]
-        pixel_face_normals = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, face_normals)
+        pixel_face_normals = interpolate_face_attributes(
+            fragments.pix_to_face, fragments.bary_coords, face_normals
+        )
 
         blend_params = BlendParams(sigma=0, gamma=0, background_color=[0.0] * 3)
         normal_rendering = hard_feature_blend(pixel_face_normals, fragments, blend_params)
@@ -702,11 +772,23 @@ class NHAOptimizer(pl.LightningModule):
         if return_rasterizer_results:
             return normal_rendering, dict(fragments=fragments, screen_coords=screen_coords)
 
-        return normal_rendering   # shape N x 3+1 x H x W
+        return normal_rendering  # shape N x 3+1 x H x W
 
-    def _render_rgba(self, verts, K, RT, H, W, expr, pose, mouth_cond, return_rasterizer_results=False,
-                     rasterized_results=None, rendered_normals=None, center_prediction=False):
-
+    def _render_rgba(
+        self,
+        verts,
+        K,
+        RT,
+        H,
+        W,
+        expr,
+        pose,
+        mouth_cond,
+        return_rasterizer_results=False,
+        rasterized_results=None,
+        rendered_normals=None,
+        center_prediction=False,
+    ):
         """
         render rgba image tensor of shape N x 4 x H x W
         first 3 channels normalized to -1 ... 1; 4th channel 0 ... 1
@@ -734,8 +816,9 @@ class NHAOptimizer(pl.LightningModule):
         if rasterized_results is not None and not center_prediction:
             fragments, screen_coords = rasterized_results
         else:
-            fragments, screen_coords = self._rasterize(flame_meshes, cameras, (H, W),
-                                                       center_prediction=center_prediction)
+            fragments, screen_coords = self._rasterize(
+                flame_meshes, cameras, (H, W), center_prediction=center_prediction
+            )
         N, H, W, faces_per_pix, _ = fragments.bary_coords.shape
 
         assert faces_per_pix == 1  # otherwise explicit texels might get messed up
@@ -743,14 +826,18 @@ class NHAOptimizer(pl.LightningModule):
         # FACE COORD RENDERING
         face_coords = self._flame.face_coords_normed.repeat(N, 1, 1)
         # shape: N x H x W x K x 3
-        pixel_face_coords = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, face_coords)
+        pixel_face_coords = interpolate_face_attributes(
+            fragments.pix_to_face, fragments.bary_coords, face_coords
+        )
 
         # EXPL TEXTURE SAMPLING
         mask = fragments.pix_to_face != -1
         uv_coords = self._flame.face_uvcoords.repeat(N, 1, 1)
 
         # shape: N x H x W x K x 2
-        pixel_uv_coords = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords, uv_coords)[..., :2]
+        pixel_uv_coords = interpolate_face_attributes(
+            fragments.pix_to_face, fragments.bary_coords, uv_coords
+        )[..., :2]
         pixel_uv_ids = self._flame.face_uvmap.repeat(N)[fragments.pix_to_face]  # N x H x W x K
         pixel_uv_ids[~mask] = -1
         # pixel_expl_texels = expl_texels.permute(0, 2, 3, 1) \
@@ -760,23 +847,32 @@ class NHAOptimizer(pl.LightningModule):
         #  clip dynamic conditions
         expr, pose, mouth_cond = self._clip_expr_pose_mc(expr, pose, mouth_cond)
 
-        mouth_frequencies, mouth_phase_shifts = self._texture.predict_frequencies_phase_shifts(mouth_cond)
+        mouth_frequencies, mouth_phase_shifts = self._texture.predict_frequencies_phase_shifts(
+            mouth_cond
+        )
         stat_frequencies, stat_phase_shifts = self._texture.predict_frequencies_phase_shifts(
-            torch.zeros_like(mouth_cond))
+            torch.zeros_like(mouth_cond)
+        )
 
         frequencies = torch.stack((mouth_frequencies, stat_frequencies), dim=1)  # N x 3 x C
         phase_shifts = torch.stack((mouth_phase_shifts, stat_phase_shifts), dim=1)  # N x 3 x C
 
         # rendering semantic map
-        semantics = self._render_semantics(verts, K, RT, H, W, rasterized_results=[fragments, screen_coords],
-                                           return_confidence=True).detach()
+        semantics = self._render_semantics(
+            verts,
+            K,
+            RT,
+            H,
+            W,
+            rasterized_results=[fragments, screen_coords],
+            return_confidence=True,
+        ).detach()
 
         with torch.no_grad():
             mouth_weights = semantics[:, self.semantic_labels.index("mouth")]
             face_weights = (semantics[:, -1] - mouth_weights).clip(min=0)
             region_weights = torch.stack((mouth_weights, face_weights), dim=-1)  # N x H x W x 3
             region_weights = region_weights.view(N, H, W, 1, -1)  # N x H x W x K x 3
-
 
         # MLP TEXTURE SAMPLING
         pixel_face_coords_masked = pixel_face_coords[mask]
@@ -785,37 +881,71 @@ class NHAOptimizer(pl.LightningModule):
 
         if self.use_normals:
             if rendered_normals is None:
-                rendered_normals = self._render_normals(verts, K, RT, H, W, cameras=cameras, flame_meshes=flame_meshes,
-                                                        rasterized_results=[fragments, screen_coords], )[:, :3]
+                rendered_normals = self._render_normals(
+                    verts,
+                    K,
+                    RT,
+                    H,
+                    W,
+                    cameras=cameras,
+                    flame_meshes=flame_meshes,
+                    rasterized_results=[fragments, screen_coords],
+                )[:, :3]
             if getattr(self, "n_upsample", 1) != 1:
-                rendered_normals = torchvision.transforms.functional.resize(rendered_normals, (
-                        torch.tensor(rendered_normals.shape[-2:]) / self.n_upsample).int().tolist())
+                rendered_normals = torchvision.transforms.functional.resize(
+                    rendered_normals,
+                    (torch.tensor(rendered_normals.shape[-2:]) / self.n_upsample).int().tolist(),
+                )
             normal_encoding = self._normal_encoder(rendered_normals)  # N x C x H x W
             if getattr(self, "n_upsample", 1) != 1:
                 normal_encoding = torchvision.transforms.functional.resize(normal_encoding, (H, W))
         else:
-            normal_encoding = torch.zeros(N, self.hparams["d_normal_encoding"], H, W, device=self.device, dtype=torch.float)
+            normal_encoding = torch.zeros(
+                N, self.hparams["d_normal_encoding"], H, W, device=self.device, dtype=torch.float
+            )
 
         pixel_normal_encoding = normal_encoding.permute(0, 2, 3, 1)
-        pixel_normal_encoding = pixel_normal_encoding.unsqueeze(-2).expand(-1, -1, -1, faces_per_pix,
-                                                                           -1)  # N x H x W x K x D
+        pixel_normal_encoding = pixel_normal_encoding.unsqueeze(-2).expand(
+            -1, -1, -1, faces_per_pix, -1
+        )  # N x H x W x K x D
         pixel_normal_encoding_masked = pixel_normal_encoding[mask]
-        pixel_expl_features_masked = self._explFeatures(pixel_uv_coords_masked.view(1, 1, -1, 2),
-                                                        pixel_uv_ids_masked.view(1, 1, -1))
+        pixel_expl_features_masked = self._explFeatures(
+            pixel_uv_coords_masked.view(1, 1, -1, 2), pixel_uv_ids_masked.view(1, 1, -1)
+        )
         pixel_expl_features_masked = pixel_expl_features_masked[0, :, 0, :].permute(1, 0)
-        static_mlp_conditions_masked = torch.cat((pixel_face_coords_masked, pixel_expl_features_masked), dim=-1)
-        n_masked = torch.arange(N, device=self.device).view(N, 1, 1, 1).expand(N, H, W, faces_per_pix)[mask]
+        static_mlp_conditions_masked = torch.cat(
+            (pixel_face_coords_masked, pixel_expl_features_masked), dim=-1
+        )
+        n_masked = (
+            torch.arange(N, device=self.device)
+            .view(N, 1, 1, 1)
+            .expand(N, H, W, faces_per_pix)[mask]
+        )
         region_weights_masked = region_weights[mask]  # N' x 3
-        frequencies_masked = torch.sum(frequencies[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
-        phase_shifts_masked = torch.sum(phase_shifts[n_masked] * region_weights_masked.unsqueeze(-1), dim=1)
+        frequencies_masked = torch.sum(
+            frequencies[n_masked] * region_weights_masked.unsqueeze(-1), dim=1
+        )
+        phase_shifts_masked = torch.sum(
+            phase_shifts[n_masked] * region_weights_masked.unsqueeze(-1), dim=1
+        )
         # N' x C
 
-        mlp_pixel_rgb = torch.zeros(N, H, W, faces_per_pix, 3, dtype=fragments.bary_coords.dtype,
-                                    device=fragments.bary_coords.device)
+        mlp_pixel_rgb = torch.zeros(
+            N,
+            H,
+            W,
+            faces_per_pix,
+            3,
+            dtype=fragments.bary_coords.dtype,
+            device=fragments.bary_coords.device,
+        )
 
-        mlp_pixel_rgb[mask] = self._texture.forward(static_mlp_conditions_masked, frequencies_masked,
-                                                    phase_shifts_masked,
-                                                    dynamic_conditions=pixel_normal_encoding_masked)
+        mlp_pixel_rgb[mask] = self._texture.forward(
+            static_mlp_conditions_masked,
+            frequencies_masked,
+            phase_shifts_masked,
+            dynamic_conditions=pixel_normal_encoding_masked,
+        )
 
         blend_params = BlendParams(sigma=0, gamma=0, background_color=[1.0] * 3)
         mlp_rgba_pred = hard_feature_blend(mlp_pixel_rgb, fragments, blend_params)
@@ -842,8 +972,15 @@ class NHAOptimizer(pl.LightningModule):
             flame_params_offsets = self._create_flame_param_batch(batch)
             _, _, mc = self._forward_flame(flame_params_offsets, return_mouth_conditioning=True)
             expr = flame_params_offsets["expr"]
-            pose = torch.cat((flame_params_offsets["rotation"], flame_params_offsets["neck"],
-                              flame_params_offsets["jaw"], flame_params_offsets["eyes"]), dim=1)
+            pose = torch.cat(
+                (
+                    flame_params_offsets["rotation"],
+                    flame_params_offsets["neck"],
+                    flame_params_offsets["jaw"],
+                    flame_params_offsets["eyes"],
+                ),
+                dim=1,
+            )
 
             if i == 0:
                 self.expr_min = torch.min(expr, dim=0).values
@@ -857,8 +994,12 @@ class NHAOptimizer(pl.LightningModule):
                 self.expr_max = torch.max(self.expr_max, torch.max(expr, dim=0).values)
                 self.pose_min = torch.min(self.pose_min, torch.min(pose, dim=0).values)
                 self.pose_max = torch.max(self.pose_max, torch.max(pose, dim=0).values)
-                self.mouth_conditioning_min = torch.min(self.mouth_conditioning_min, torch.min(mc, dim=0).values)
-                self.mouth_conditioning_max = torch.max(self.mouth_conditioning_max, torch.max(mc, dim=0).values)
+                self.mouth_conditioning_min = torch.min(
+                    self.mouth_conditioning_min, torch.min(mc, dim=0).values
+                )
+                self.mouth_conditioning_max = torch.max(
+                    self.mouth_conditioning_max, torch.max(mc, dim=0).values
+                )
 
         return (
             (self.expr_min, self.expr_max),
@@ -870,8 +1011,9 @@ class NHAOptimizer(pl.LightningModule):
         if not self.training:
             expr = expr.clip(min=self.expr_min, max=self.expr_max)
             pose = pose.clip(min=self.pose_min, max=self.pose_max)
-            mouth_conditioning = mouth_conditioning.clip(min=self.mouth_conditioning_min,
-                                                         max=self.mouth_conditioning_max)
+            mouth_conditioning = mouth_conditioning.clip(
+                min=self.mouth_conditioning_min, max=self.mouth_conditioning_max
+            )
 
         #  Soft Clipping: conditions are scaled such that "normal" movements result in parameter changes of roughly
         #  +-2 before applying tanh. sigma can be set as hyperparameter to strengthen (high sigma) or weaken (low sigma)
@@ -880,10 +1022,18 @@ class NHAOptimizer(pl.LightningModule):
         if sig > 0:
             expr = torch.tanh(expr * sig)
             pose = torch.tanh(
-                torch.cat((pose[..., :3] / (np.pi / 4.0),  # global rot in angles with native range +- pi/2
-                           pose[..., 3:9],
-                           pose[..., 9:] / (np.pi / 4.0),  # eye rot in angles with native range +- pi/2
-                           ), dim=-1, ) * sig)
+                torch.cat(
+                    (
+                        pose[..., :3]
+                        / (np.pi / 4.0),  # global rot in angles with native range +- pi/2
+                        pose[..., 3:9],
+                        pose[..., 9:]
+                        / (np.pi / 4.0),  # eye rot in angles with native range +- pi/2
+                    ),
+                    dim=-1,
+                )
+                * sig
+            )
             mouth_conditioning = torch.cat(
                 (
                     mouth_conditioning[..., :-3],
@@ -894,8 +1044,17 @@ class NHAOptimizer(pl.LightningModule):
 
         return expr, pose, mouth_conditioning
 
-    def _render_semantics(self, verts, K, RT, H, W, return_rasterizer_results=False, rasterized_results=None,
-                          return_confidence=False):
+    def _render_semantics(
+        self,
+        verts,
+        K,
+        RT,
+        H,
+        W,
+        return_rasterizer_results=False,
+        rasterized_results=None,
+        return_confidence=False,
+    ):
         """
         render semantic image tensor of shape N x C+1 x H x W (last channel is bg channel)
         entries between 0 ... 1
@@ -927,11 +1086,14 @@ class NHAOptimizer(pl.LightningModule):
 
         C = face_semantics.shape[-1]
         face_semantics = face_semantics.repeat(N, 1)[flame_meshes.faces_packed()]
-        pixel_face_semantics = interpolate_face_attributes(fragments.pix_to_face, fragments.bary_coords,
-                                                           face_semantics)  # N x H x W x K x C
+        pixel_face_semantics = interpolate_face_attributes(
+            fragments.pix_to_face, fragments.bary_coords, face_semantics
+        )  # N x H x W x K x C
 
         blend_params = BlendParams(sigma=0, gamma=0, background_color=[0.0] * C)
-        semantic_rendering = hard_feature_blend(pixel_face_semantics, fragments, blend_params)  # N x H x W x C+1
+        semantic_rendering = hard_feature_blend(
+            pixel_face_semantics, fragments, blend_params
+        )  # N x H x W x C+1
         semantic_rendering = semantic_rendering.permute(0, 3, 1, 2)  # N x C+1 x H x W
 
         if return_rasterizer_results:
@@ -943,7 +1105,6 @@ class NHAOptimizer(pl.LightningModule):
     # LOSS TERMS START HERE
     #
     def _blur_vertex_labels(self, vert_labels, blur_iters=2):
-
         # 1. we build the filter matrix
         meshes = Meshes(verts=[self._flame.v_template], faces=[self._flame.faces])
         verts = meshes.verts_packed()
@@ -983,7 +1144,9 @@ class NHAOptimizer(pl.LightningModule):
         return vert_labels
 
     def _compute_mesh_guidance_energy(self, vertices, margin=0):
-        flame_meshes = Meshes(verts=vertices, faces=self._flame.faces[None].expand(len(vertices), -1, -1))
+        flame_meshes = Meshes(
+            verts=vertices, faces=self._flame.faces[None].expand(len(vertices), -1, -1)
+        )
 
         flame_vertices_packed = flame_meshes.verts_packed()
         flame_vertices_to_first = flame_meshes.mesh_to_verts_packed_first_idx()
@@ -991,7 +1154,7 @@ class NHAOptimizer(pl.LightningModule):
         guidance_tris = guidance_meshes.verts_packed()[guidance_meshes.faces_packed()]
         guidance_tris_to_first_idx = guidance_meshes.mesh_to_faces_packed_first_idx()
         max_tris = guidance_meshes.num_faces_per_mesh().max().item()
-        
+
         point_to_face = face_point_distance(
             flame_vertices_packed,
             flame_vertices_to_first,
@@ -1018,9 +1181,8 @@ class NHAOptimizer(pl.LightningModule):
         # Compute the difference between depth and zbuf
         diff = (depth - zbuf) * mask
         # Compute the loss
-        loss = (diff ** 2).mean()
+        loss = (diff**2).mean()
         return loss
-
 
     def _compute_laplacian_smoothing_loss(self, vertices, offset_vertices):
         batch_faces = self._flame.faces[None, ...]
@@ -1071,22 +1233,32 @@ class NHAOptimizer(pl.LightningModule):
         N, V, _ = verts.shape
         H, W = gt_mask.shape[-2:]
 
-        semantics_pred, raster_res = self._render_semantics(verts, K=K, RT=RT, H=H, W=W, return_rasterizer_results=True,
-                                                            rasterized_results=rasterized_results)
+        semantics_pred, raster_res = self._render_semantics(
+            verts,
+            K=K,
+            RT=RT,
+            H=H,
+            W=W,
+            return_rasterizer_results=True,
+            rasterized_results=rasterized_results,
+        )
 
         pred_mask = semantics_pred[:, [-1]]
 
         screen_coords = raster_res["screen_coords"] * (-1)  # N x H_r x W_r x 2
 
-        loss, iou = calc_holefilling_segmentation_loss(gt_mask.float(), pred_mask.float(), screen_coords,
-                                                       return_iou=True, sigma=2.0)
+        loss, iou = calc_holefilling_segmentation_loss(
+            gt_mask.float(), pred_mask.float(), screen_coords, return_iou=True, sigma=2.0
+        )
 
         if return_iou:
             return loss, iou.mean()
         else:
             return loss
 
-    def _compute_semantic_loss(self, batch, vertices_offsets, rasterized_results=None, return_total_iou=False):
+    def _compute_semantic_loss(
+        self, batch, vertices_offsets, rasterized_results=None, return_total_iou=False
+    ):
         """
         calculates semantic loss for ears, eyes, mouth, and hair
         :param batch:
@@ -1112,7 +1284,7 @@ class NHAOptimizer(pl.LightningModule):
         )
         screen_coords = raster_res["screen_coords"] * (-1)  # N x H_r x W_r x 2
         semantics_pred = prediction[:, : len(self.semantic_labels)]
-        confidence = prediction[:, len(self.semantic_labels): -1]
+        confidence = prediction[:, len(self.semantic_labels) : -1]
         alpha = prediction[:, [-1]]
 
         # EAR SEGMENTATION
@@ -1130,7 +1302,7 @@ class NHAOptimizer(pl.LightningModule):
             screen_coords,
             return_iou=True,
             sigma=2.0,
-            grad_weight=confidence_ear ** 10,
+            grad_weight=confidence_ear**10,
         )
 
         # EYE + MOUTH SEGMENTATION
@@ -1199,7 +1371,7 @@ class NHAOptimizer(pl.LightningModule):
             screen_coords,
             return_iou=True,
             sigma=2.0,
-            grad_weight=confidence_head ** 10,
+            grad_weight=confidence_head**10,
         )
 
         retval = [
@@ -1211,8 +1383,16 @@ class NHAOptimizer(pl.LightningModule):
             retval.append(IoU(alpha > 0, ~bg_gt & ~cloth_gt))
         return retval
 
-    def _compute_rgb_losses(self, batch, verts, expr, pose, mouth_conditioning, rasterized_results=None,
-                            rendered_normals=None):
+    def _compute_rgb_losses(
+        self,
+        batch,
+        verts,
+        expr,
+        pose,
+        mouth_conditioning,
+        rasterized_results=None,
+        rendered_normals=None,
+    ):
         """
         Computes photometric and perceptual loss
         :returns dict("rgb_loss"=scalar_rgb_loss_tensor, "perc_loss"=scalar_perc_loss_tensor)
@@ -1225,10 +1405,19 @@ class NHAOptimizer(pl.LightningModule):
         RT = batch["cam_extrinsic"]
         H, W = rgb_gt.shape[-2:]
 
-        rgba_pred, raster_dict = self._render_rgba(verts, K, RT, H, W, expr=expr, pose=pose,
-                                                   mouth_cond=mouth_conditioning, rendered_normals=rendered_normals,
-                                                   return_rasterizer_results=True,
-                                                   rasterized_results=rasterized_results)
+        rgba_pred, raster_dict = self._render_rgba(
+            verts,
+            K,
+            RT,
+            H,
+            W,
+            expr=expr,
+            pose=pose,
+            mouth_cond=mouth_conditioning,
+            rendered_normals=rendered_normals,
+            return_rasterizer_results=True,
+            rasterized_results=rasterized_results,
+        )
 
         predicted_images = rgba_pred[:, :3]
         predicted_seg = rgba_pred[:, [3]].detach()
@@ -1244,9 +1433,14 @@ class NHAOptimizer(pl.LightningModule):
         # ATTENTION: perceptual loss only provides gradient to texture!
         # don't apply gradient to boundary of silhouette -> artifacts occur otherwise
         gradient_margin = int(max(H, W) / 50)
-        predicted_images = softmask_gradient(predicted_images, erode_mask(predicted_seg, gradient_margin))
-        perc_loss = self._perceptual_loss(predicted_images, screen_colors.detach()).mean() if \
-            self.get_current_lrs_n_lossweights()["w_perc"] >= 0 else 0.0
+        predicted_images = softmask_gradient(
+            predicted_images, erode_mask(predicted_seg, gradient_margin)
+        )
+        perc_loss = (
+            self._perceptual_loss(predicted_images, screen_colors.detach()).mean()
+            if self.get_current_lrs_n_lossweights()["w_perc"] >= 0
+            else 0.0
+        )
 
         return dict(rgb_loss=rgb_loss, perc_loss=perc_loss)
 
@@ -1264,7 +1458,9 @@ class NHAOptimizer(pl.LightningModule):
         confidence[:, [37, 38, 43, 44, 41, 40, 47, 46]] = 0
 
         # normalize original landmarks to image resolution
-        lmks[:, :, 0], lmks[:, :, 1] = normalize_image_points(lmks[:, :, 0], lmks[:, :, 1], img_size)
+        lmks[:, :, 0], lmks[:, :, 1] = normalize_image_points(
+            lmks[:, :, 0], lmks[:, :, 1], img_size
+        )
         proj_pred_lmks = batch_project(pred_lmks, K, RT, img_size, self.device, normalize=True)
         proj_pred_lmks, z = proj_pred_lmks[:, :, :2], proj_pred_lmks[:, :, 2]
 
@@ -1272,7 +1468,6 @@ class NHAOptimizer(pl.LightningModule):
         return lmk_loss[:, :68].mean()
 
     def _compute_eye_closed_loss(self, flame_params, batch):
-
         # left eye:  [38,42], [39,41] - 1
         # right eye: [44,48], [45,47] -1
         K = batch["cam_intrinsic"]
@@ -1303,10 +1498,12 @@ class NHAOptimizer(pl.LightningModule):
 
     def _compute_flame_reg_losses(self, batch):
         indices = torch.unique(batch["frame"])
-        shape_reg = torch.sum(self._shape ** 2) / 2
+        shape_reg = torch.sum(self._shape**2) / 2
         expr_reg = torch.sum(self._expr[indices] ** 2) / 2
-        pose = torch.cat([self._neck_pose[indices], self._jaw_pose[indices], self._eyes_pose[indices]], dim=1)
-        pose_reg = torch.sum(pose ** 2) / 2
+        pose = torch.cat(
+            [self._neck_pose[indices], self._jaw_pose[indices], self._eyes_pose[indices]], dim=1
+        )
+        pose_reg = torch.sum(pose**2) / 2
         return shape_reg, expr_reg, pose_reg
 
     def _get_normal_mask(self, batch):
@@ -1338,8 +1535,14 @@ class NHAOptimizer(pl.LightningModule):
             mask = mask | (parsing == idx)
         return mask.float() * gt_normal_mask
 
-    def _compute_normal_loss(self, batch, vertices_offsets, rendered_semantics, rasterized_results=None,
-                             return_normal_pred=False):
+    def _compute_normal_loss(
+        self,
+        batch,
+        vertices_offsets,
+        rendered_semantics,
+        rasterized_results=None,
+        return_normal_pred=False,
+    ):
         """
 
         :param batch:
@@ -1357,8 +1560,15 @@ class NHAOptimizer(pl.LightningModule):
         K = batch["cam_intrinsic"]
         RT = batch["cam_extrinsic"]
 
-        normal_pred, raster_res = self._render_normals(vertices_offsets, K, RT, H, W, return_rasterizer_results=True,
-                                                       rasterized_results=rasterized_results)
+        normal_pred, raster_res = self._render_normals(
+            vertices_offsets,
+            K,
+            RT,
+            H,
+            W,
+            return_rasterizer_results=True,
+            rasterized_results=rasterized_results,
+        )
 
         normal_pred, seg_pred = normal_pred[:, :3], normal_pred[:, [3]]
 
@@ -1380,10 +1590,20 @@ class NHAOptimizer(pl.LightningModule):
         # calculating normal laplacians
         sigma = max(H, W) / 50
         with torch.no_grad():
-            blurred_normal_gt = masked_gaussian_blur(normal_gt.detach(), mask, sigma=sigma, kernel_size=None,
-                                                     blur_fc=seperated_gaussian_blur)
-            blurred_normal_pred = masked_gaussian_blur(normal_pred.detach(), mask, sigma=sigma, kernel_size=None,
-                                                       blur_fc=seperated_gaussian_blur)
+            blurred_normal_gt = masked_gaussian_blur(
+                normal_gt.detach(),
+                mask,
+                sigma=sigma,
+                kernel_size=None,
+                blur_fc=seperated_gaussian_blur,
+            )
+            blurred_normal_pred = masked_gaussian_blur(
+                normal_pred.detach(),
+                mask,
+                sigma=sigma,
+                kernel_size=None,
+                blur_fc=seperated_gaussian_blur,
+            )
 
         normal_gt_lapl = normal_gt - blurred_normal_gt
         normal_pred_lapl = normal_pred - blurred_normal_pred
@@ -1402,7 +1622,6 @@ class NHAOptimizer(pl.LightningModule):
         # return self._masked_L1(normal_gt, normal_pred, mask=mask)
 
     def _compute_surface_consistency(self, offsets):
-
         N = len(offsets)
 
         if N == 1:
@@ -1412,7 +1631,7 @@ class NHAOptimizer(pl.LightningModule):
 
         # for each frame select another frame and compare their offsets
         all_indices = list(range(N))
-        possible_partners = [all_indices[:i] + all_indices[i + 1:] for i in all_indices]
+        possible_partners = [all_indices[:i] + all_indices[i + 1 :] for i in all_indices]
         partner_indices = [np.random.choice(p) for p in possible_partners]
 
         frame_i_offsets = offsets
@@ -1423,7 +1642,6 @@ class NHAOptimizer(pl.LightningModule):
         return diff.sum() / N
 
     def _compute_edge_length_loss(self, offset_vertices):
-
         if self._edge_mask is None:
             # compute edge mask that later limits the calculation to scalp vertices only
             meshes = Meshes(verts=[self._flame.v_template], faces=[self._flame.faces])
@@ -1479,10 +1697,13 @@ class NHAOptimizer(pl.LightningModule):
         # precompute rasterization results to safe computation time
         raster_res = self._rasterize_flame(batch, offsets_verts)
 
-        silh_loss = self._compute_silhouette_loss(batch, offsets_verts, rasterized_results=raster_res)
+        silh_loss = self._compute_silhouette_loss(
+            batch, offsets_verts, rasterized_results=raster_res
+        )
 
-        sem_res = self._compute_semantic_loss(batch, offsets_verts, rasterized_results=raster_res,
-                                              return_total_iou=True)
+        sem_res = self._compute_semantic_loss(
+            batch, offsets_verts, rasterized_results=raster_res, return_total_iou=True
+        )
         semantic_loss, semantic_iou, semantic_pred, total_iou = sem_res
         sem_ear, sem_eye, sem_mouth, sem_hair = semantic_loss
         iou_ear, iou_eye, iou_mouth, iou_hair = semantic_iou
@@ -1500,12 +1721,16 @@ class NHAOptimizer(pl.LightningModule):
         lmk_loss = self._compute_lmk_loss(batch, pred_lmks)
 
         if loss_weights["w_chamfer"] != 0:
-            chamfer_loss = self._compute_mesh_guidance_energy(offsets_verts, self.hparams['mesh_guidance_margin'])
+            chamfer_loss = self._compute_mesh_guidance_energy(
+                offsets_verts, self.hparams["mesh_guidance_margin"]
+            )
         else:
             chamfer_loss = 0
-        
+
         if loss_weights["w_panohead_depth"] != 0:
-            depth_guidance_loss = self._compute_depth_guidance_loss(batch['depth'], raster_res[0].zbuf, batch['parsing'])
+            depth_guidance_loss = self._compute_depth_guidance_loss(
+                batch["depth"], raster_res[0].zbuf, batch["parsing"]
+            )
         else:
             depth_guidance_loss = 0
 
@@ -1516,15 +1741,24 @@ class NHAOptimizer(pl.LightningModule):
         edge_loss = self._compute_edge_length_loss(offsets_verts)
         shape_reg, expr_reg, pose_reg = self._compute_flame_reg_losses(batch)
 
-
-        total_loss = loss_weights["w_norm"] * normal_loss + loss_weights["w_lap"] * lap_loss + \
-                     loss_weights["w_silh"] * silh_loss + loss_weights["w_edge"] * edge_loss + \
-                     loss_weights["w_lmk"] * lmk_loss + loss_weights["w_eye_closed"] * eye_closed_loss + \
-                     loss_weights["w_shape_reg"] * shape_reg + loss_weights["w_expr_reg"] * expr_reg + \
-                     loss_weights["w_pose_reg"] * pose_reg + loss_weights["w_surface_reg"] * surface_reg + \
-                     loss_weights["w_semantic_ear"] * sem_ear + loss_weights["w_semantic_mouth"] * sem_mouth + \
-                     loss_weights["w_semantic_hair"] * sem_hair + loss_weights["w_semantic_eye"] * sem_eye + \
-                     loss_weights["w_chamfer"] * chamfer_loss + loss_weights["w_panohead_depth"] * depth_guidance_loss
+        total_loss = (
+            loss_weights["w_norm"] * normal_loss
+            + loss_weights["w_lap"] * lap_loss
+            + loss_weights["w_silh"] * silh_loss
+            + loss_weights["w_edge"] * edge_loss
+            + loss_weights["w_lmk"] * lmk_loss
+            + loss_weights["w_eye_closed"] * eye_closed_loss
+            + loss_weights["w_shape_reg"] * shape_reg
+            + loss_weights["w_expr_reg"] * expr_reg
+            + loss_weights["w_pose_reg"] * pose_reg
+            + loss_weights["w_surface_reg"] * surface_reg
+            + loss_weights["w_semantic_ear"] * sem_ear
+            + loss_weights["w_semantic_mouth"] * sem_mouth
+            + loss_weights["w_semantic_hair"] * sem_hair
+            + loss_weights["w_semantic_eye"] * sem_eye
+            + loss_weights["w_chamfer"] * chamfer_loss
+            + loss_weights["w_panohead_depth"] * depth_guidance_loss
+        )
 
         log_dict = {
             "lap_loss": lap_loss,
@@ -1572,13 +1806,16 @@ class NHAOptimizer(pl.LightningModule):
         )
 
         for key in noise_multiplier:
-            noise = torch.randn_like(flame_params[key]) * noise_multiplier[key] * self.hparams["flame_noise"]
+            noise = (
+                torch.randn_like(flame_params[key])
+                * noise_multiplier[key]
+                * self.hparams["flame_noise"]
+            )
             flame_params[key] = flame_params[key] + noise
 
         return flame_params
 
     def _optimize_texture(self, batch):
-
         # construct mesh
         flame_params_offsets = self._create_flame_param_batch(batch)
         offsets_verts, _ = self._forward_flame(flame_params_offsets)
@@ -1588,7 +1825,9 @@ class NHAOptimizer(pl.LightningModule):
         for key, val in flame_params_offsets.items():
             flame_params_offsets_detached[key] = val.detach()
         flame_params_noise = self._add_noise_to_flame_params(flame_params_offsets_detached)
-        _, _, mouth_conditioning = self._forward_flame(flame_params_noise, return_mouth_conditioning=True)
+        _, _, mouth_conditioning = self._forward_flame(
+            flame_params_noise, return_mouth_conditioning=True
+        )
         expr = flame_params_noise["expr"]
         pose = torch.cat(
             (
@@ -1627,7 +1866,6 @@ class NHAOptimizer(pl.LightningModule):
         return total_loss, log_dict
 
     def _optimize_jointly(self, batch):
-
         # construct mesh
         flame_params = self._create_flame_param_batch(batch, ignore_offsets=True)
         vertices, _ = self._forward_flame(flame_params)
@@ -1640,7 +1878,9 @@ class NHAOptimizer(pl.LightningModule):
         for key, val in flame_params_offsets.items():
             flame_params_offsets_detached[key] = val.detach()
         flame_params_noise = self._add_noise_to_flame_params(flame_params_offsets_detached)
-        _, _, mouth_conditioning = self._forward_flame(flame_params_noise, return_mouth_conditioning=True)
+        _, _, mouth_conditioning = self._forward_flame(
+            flame_params_noise, return_mouth_conditioning=True
+        )
 
         expr = flame_params_noise["expr"]
         pose = torch.cat(
@@ -1654,8 +1894,9 @@ class NHAOptimizer(pl.LightningModule):
         )
 
         # calculating losses
-        sem_res = self._compute_semantic_loss(batch, offsets_verts, rasterized_results=raster_res,
-                                              return_total_iou=True)
+        sem_res = self._compute_semantic_loss(
+            batch, offsets_verts, rasterized_results=raster_res, return_total_iou=True
+        )
         semantic_loss, semantic_iou, semantic_pred, total_iou = sem_res
         sem_ear, sem_eye, sem_mouth, sem_hair = semantic_loss
         iou_ear, iou_eye, iou_mouth, iou_hair = semantic_iou
@@ -1679,7 +1920,9 @@ class NHAOptimizer(pl.LightningModule):
         rgb_loss = phot_lossdict["rgb_loss"]
         perc_loss = phot_lossdict["perc_loss"]
 
-        silh_loss = self._compute_silhouette_loss(batch, offsets_verts, rasterized_results=raster_res)
+        silh_loss = self._compute_silhouette_loss(
+            batch, offsets_verts, rasterized_results=raster_res
+        )
 
         eye_closed_loss = self._compute_eye_closed_loss(copy(flame_params), batch)
 
@@ -1693,24 +1936,39 @@ class NHAOptimizer(pl.LightningModule):
 
         weights = self.get_current_lrs_n_lossweights()
 
-        if self.hparams['mesh'] is not None:
-            chamfer_loss = self._compute_mesh_guidance_energy(offsets_verts, self.hparams['mesh_guidance_margin'])
+        if self.hparams["mesh"] is not None:
+            chamfer_loss = self._compute_mesh_guidance_energy(
+                offsets_verts, self.hparams["mesh_guidance_margin"]
+            )
         else:
             chamfer_loss = 0
-        if 'depth' in batch:
-            depth_guidance_loss = self._compute_depth_guidance_loss(batch['depth'], raster_res[0].zbuf, batch['parsing'])
+        if "depth" in batch:
+            depth_guidance_loss = self._compute_depth_guidance_loss(
+                batch["depth"], raster_res[0].zbuf, batch["parsing"]
+            )
         else:
             depth_guidance_loss = 0
 
-        total_loss = weights["w_rgb"] * rgb_loss + weights["w_silh"] * silh_loss + \
-                     weights["w_semantic_ear"] * sem_ear + weights["w_semantic_eye"] * sem_eye + \
-                     weights["w_semantic_mouth"] * sem_mouth + weights["w_semantic_hair"] * sem_hair + \
-                     weights["w_edge"] * edge_loss + weights["w_norm"] * normal_loss + weights["w_lap"] * lap_loss + \
-                     weights["w_lmk"] * lmk_loss + weights["w_eye_closed"] * eye_closed_loss + \
-                     weights["w_perc"] * perc_loss + weights["w_shape_reg"] * shape_reg + \
-                     weights["w_surface_reg"] * surface_reg + weights["w_expr_reg"] * expr_reg + \
-                     weights["w_pose_reg"] * pose_reg + \
-                     weights["w_chamfer"] * chamfer_loss + weights["w_panohead_depth"] * depth_guidance_loss
+        total_loss = (
+            weights["w_rgb"] * rgb_loss
+            + weights["w_silh"] * silh_loss
+            + weights["w_semantic_ear"] * sem_ear
+            + weights["w_semantic_eye"] * sem_eye
+            + weights["w_semantic_mouth"] * sem_mouth
+            + weights["w_semantic_hair"] * sem_hair
+            + weights["w_edge"] * edge_loss
+            + weights["w_norm"] * normal_loss
+            + weights["w_lap"] * lap_loss
+            + weights["w_lmk"] * lmk_loss
+            + weights["w_eye_closed"] * eye_closed_loss
+            + weights["w_perc"] * perc_loss
+            + weights["w_shape_reg"] * shape_reg
+            + weights["w_surface_reg"] * surface_reg
+            + weights["w_expr_reg"] * expr_reg
+            + weights["w_pose_reg"] * pose_reg
+            + weights["w_chamfer"] * chamfer_loss
+            + weights["w_panohead_depth"] * depth_guidance_loss
+        )
 
         log_dict = {
             "rgb_loss": rgb_loss,
@@ -1838,7 +2096,9 @@ class NHAOptimizer(pl.LightningModule):
                 loss, log_dict = self._optimize_offsets(batch)
 
             # step 2: optimization texture
-            elif self.current_epoch < self.hparams["epochs_offset"] + self.hparams["epochs_texture"]:
+            elif (
+                self.current_epoch < self.hparams["epochs_offset"] + self.hparams["epochs_texture"]
+            ):
                 loss, log_dict = self._optimize_texture(batch)
 
             # step 3: optimization texture and shape
@@ -1878,11 +2138,18 @@ class NHAOptimizer(pl.LightningModule):
         if batch_idx == 0 and log_images:
             try:
                 interesting_frames = [1455, 536] if stage == "train" else [826, 1399]
-                dataset = self.trainer.train_dataloader.dataset.datasets if stage == "train" else \
-                    self.trainer.val_dataloaders[0].dataset
-                interesting_samples = [dataset[dataset.frame_list.index(f)] for f in interesting_frames]
+                dataset = (
+                    self.trainer.train_dataloader.dataset.datasets
+                    if stage == "train"
+                    else self.trainer.val_dataloaders[0].dataset
+                )
+                interesting_samples = [
+                    dataset[dataset.frame_list.index(f)] for f in interesting_frames
+                ]
             except ValueError:
-                interesting_samples = [dataset[i] for i in np.linspace(0, len(dataset), 4).astype(int)[1:3]]
+                interesting_samples = [
+                    dataset[i] for i in np.linspace(0, len(dataset), 4).astype(int)[1:3]
+                ]
             vis_batch = dict_2_device(stack_dicts(*interesting_samples), self.device)
             vis_batch = self.prepare_batch(vis_batch)
             self._visualize_head(vis_batch, max_samples=2, title=stage)
@@ -1898,8 +2165,10 @@ class NHAOptimizer(pl.LightningModule):
         return ret
 
     def validation_step(self, batch, batch_idx, **kwargs):
-        self.fit_residuals = self.current_epoch < self.hparams["epochs_offset"] or self.current_epoch >= self.hparams[
-            "epochs_texture"] + self.hparams["epochs_offset"]
+        self.fit_residuals = (
+            self.current_epoch < self.hparams["epochs_offset"]
+            or self.current_epoch >= self.hparams["epochs_texture"] + self.hparams["epochs_offset"]
+        )
         batch = self.prepare_batch(batch)
 
         with torch.set_grad_enabled(self.fit_residuals):
@@ -1913,16 +2182,37 @@ class NHAOptimizer(pl.LightningModule):
         H, W = batch["rgb"].shape[-2:]
 
         flame_params_offsets = self._create_flame_param_batch(batch)
-        offsets_verts, pred_lmks, mouth_conditioning = self._forward_flame(flame_params_offsets, return_mouth_conditioning=True)
+        offsets_verts, pred_lmks, mouth_conditioning = self._forward_flame(
+            flame_params_offsets, return_mouth_conditioning=True
+        )
         cameras = create_camera_objects(K, RT, (H, W), self.device)
-        flame_meshes = Meshes(verts=offsets_verts, faces=self._flame.faces[None].expand(len(offsets_verts), -1, -1))
+        flame_meshes = Meshes(
+            verts=offsets_verts, faces=self._flame.faces[None].expand(len(offsets_verts), -1, -1)
+        )
         expr = flame_params_offsets["expr"]
-        pose = torch.cat((flame_params_offsets["rotation"], flame_params_offsets["neck"], flame_params_offsets["jaw"],
-                          flame_params_offsets["eyes"]), dim=1)
+        pose = torch.cat(
+            (
+                flame_params_offsets["rotation"],
+                flame_params_offsets["neck"],
+                flame_params_offsets["jaw"],
+                flame_params_offsets["eyes"],
+            ),
+            dim=1,
+        )
 
         rasterized_results = self._rasterize(flame_meshes, cameras, (H, W))
 
-        rgba_pred = self._render_rgba(offsets_verts, K, RT, H, W, expr=expr, pose=pose, mouth_cond=mouth_conditioning, rasterized_results=rasterized_results)
+        rgba_pred = self._render_rgba(
+            offsets_verts,
+            K,
+            RT,
+            H,
+            W,
+            expr=expr,
+            pose=pose,
+            mouth_cond=mouth_conditioning,
+            rasterized_results=rasterized_results,
+        )
         shaded_pred = self.predict_shaded_mesh(batch)
         if self.hparams["mesh"] is not None:
             shaded_mesh_guidance = self.render_guidance_mesh(batch)
@@ -1936,7 +2226,6 @@ class NHAOptimizer(pl.LightningModule):
         if self.hparams["mesh"] is not None:
             shaded_mesh_guidance = shaded_mesh_guidance[:N, :3]
 
-
         # Renders
         images = torch.cat([rgb_gt, rgb_pred, shaded_pred], dim=0)
         if self.hparams["mesh"] is not None:
@@ -1949,12 +2238,14 @@ class NHAOptimizer(pl.LightningModule):
         lmks_gt = batch["lmk2d"].cpu().numpy()
         proj_pred_lmks = batch_project(pred_lmks, K, RT, (H, W), self.device, normalize=True)
         img_pred_lmks = proj_pred_lmks.clone()
-        img_pred_lmks[..., 0], img_pred_lmks[..., 1] = unnormalize_image_points(img_pred_lmks[..., 0], img_pred_lmks[..., 1], (H, W)) 
+        img_pred_lmks[..., 0], img_pred_lmks[..., 1] = unnormalize_image_points(
+            img_pred_lmks[..., 0], img_pred_lmks[..., 1], (H, W)
+        )
 
         for i in range(len(rgb_gt)):
-            for x,y in lmks_gt[i][:, :2]:
+            for x, y in lmks_gt[i][:, :2]:
                 cv2.circle(rgb_gt_circles[i], (int(x), int(y)), 3, (255, 0, 0), -1)
-            for x,y in img_pred_lmks[i][:, :2].detach().cpu().numpy():
+            for x, y in img_pred_lmks[i][:, :2].detach().cpu().numpy():
                 cv2.circle(rgb_gt_circles[i], (int(x), int(y)), 3, (0, 0, 255), -1)
 
         rgb_gt_circles = torch.tensor(rgb_gt_circles).permute(0, 3, 1, 2)
@@ -1973,22 +2264,24 @@ class NHAOptimizer(pl.LightningModule):
             return_confidence=True,
         )
         semantics_pred = prediction[:, : len(self.semantic_labels)]
-        semantics_pred = torch.from_numpy(np.stack([
-            imshow_return_array(img.argmax(0).cpu().numpy())
-            for img in semantics_pred
-        ])).permute(0, 3, 1, 2)
-        parsing_gt = torch.from_numpy(np.stack([
-            imshow_return_array(img[0].cpu().numpy())
-            for img in batch["parsing"]
-        ])).permute(0, 3, 1, 2)
+        semantics_pred = torch.from_numpy(
+            np.stack([imshow_return_array(img.argmax(0).cpu().numpy()) for img in semantics_pred])
+        ).permute(0, 3, 1, 2)
+        parsing_gt = torch.from_numpy(
+            np.stack([imshow_return_array(img[0].cpu().numpy()) for img in batch["parsing"]])
+        ).permute(0, 3, 1, 2)
         parsing = torch.cat((parsing_gt, semantics_pred), dim=0)
         log_parsing_img = torchvision.utils.make_grid(parsing, nrow=N)
         self.logger.experiment.add_image(title + "parsing", log_parsing_img, self.current_epoch)
-            
 
-
-
-    def forward(self, batch, ignore_expr=False, ignore_pose=False, center_prediction=False, symmetric_rgb_range=True):
+    def forward(
+        self,
+        batch,
+        ignore_expr=False,
+        ignore_pose=False,
+        center_prediction=False,
+        symmetric_rgb_range=True,
+    ):
         """
         returns rgba tensor of shape N x 3+1 x H x W with rgb values ranging from -1 ... 1 and alpha value
         ranging from 0 to +1
@@ -2000,16 +2293,36 @@ class NHAOptimizer(pl.LightningModule):
         RT = batch["cam_extrinsic"]
         H, W = batch["rgb"].shape[-2:]
 
-        flame_params_offsets = self._create_flame_param_batch(batch, ignore_expr=ignore_expr, ignore_pose=ignore_pose)
-        offsets_verts, _, mouth_conditioning = self._forward_flame(flame_params_offsets, return_mouth_conditioning=True)
+        flame_params_offsets = self._create_flame_param_batch(
+            batch, ignore_expr=ignore_expr, ignore_pose=ignore_pose
+        )
+        offsets_verts, _, mouth_conditioning = self._forward_flame(
+            flame_params_offsets, return_mouth_conditioning=True
+        )
 
         # rgba prediction
         expr = flame_params_offsets["expr"]
-        pose = torch.cat((flame_params_offsets["rotation"], flame_params_offsets["neck"], flame_params_offsets["jaw"],
-                          flame_params_offsets["eyes"]), dim=1)
+        pose = torch.cat(
+            (
+                flame_params_offsets["rotation"],
+                flame_params_offsets["neck"],
+                flame_params_offsets["jaw"],
+                flame_params_offsets["eyes"],
+            ),
+            dim=1,
+        )
 
-        rgba_pred = self._render_rgba(offsets_verts, K, RT, H, W, expr=expr, pose=pose, mouth_cond=mouth_conditioning,
-                                      center_prediction=center_prediction)
+        rgba_pred = self._render_rgba(
+            offsets_verts,
+            K,
+            RT,
+            H,
+            W,
+            expr=expr,
+            pose=pose,
+            mouth_cond=mouth_conditioning,
+            center_prediction=center_prediction,
+        )
 
         if not symmetric_rgb_range:
             rgba_pred[:, :3] = torch.clip(rgba_pred[:, :3] * 0.5 + 0.5, min=0.0, max=1.0)
@@ -2017,8 +2330,9 @@ class NHAOptimizer(pl.LightningModule):
         return rgba_pred
 
     @torch.no_grad()
-    def predict_reenaction(self, batch, driving_model, base_target_params, base_driving_params, return_alpha=False):
-
+    def predict_reenaction(
+        self, batch, driving_model, base_target_params, base_driving_params, return_alpha=False
+    ):
         K = batch["cam_intrinsic"]
         RT = batch["cam_extrinsic"]
         N, C, H, W = batch["rgb"].shape
@@ -2035,14 +2349,25 @@ class NHAOptimizer(pl.LightningModule):
             residual_param = flame_params_driving[key] - base_driving_params[key].expand(N, -1)
             flame_params_offsets[key] = base_target_params[key].expand(N, -1) + residual_param
 
-        offsets_verts, _, mouth_conditioning = self._forward_flame(flame_params_offsets, return_mouth_conditioning=True)
+        offsets_verts, _, mouth_conditioning = self._forward_flame(
+            flame_params_offsets, return_mouth_conditioning=True
+        )
 
         # rgba prediction
         expr = flame_params_offsets["expr"]
-        pose = torch.cat((flame_params_offsets["rotation"], flame_params_offsets["neck"], flame_params_offsets["jaw"],
-                          flame_params_offsets["eyes"]), dim=1)
+        pose = torch.cat(
+            (
+                flame_params_offsets["rotation"],
+                flame_params_offsets["neck"],
+                flame_params_offsets["jaw"],
+                flame_params_offsets["eyes"],
+            ),
+            dim=1,
+        )
 
-        rgba_pred = self._render_rgba(offsets_verts, K, RT, H, W, expr=expr, pose=pose, mouth_cond=mouth_conditioning)
+        rgba_pred = self._render_rgba(
+            offsets_verts, K, RT, H, W, expr=expr, pose=pose, mouth_cond=mouth_conditioning
+        )
 
         rgb_pred, seg_pred = rgba_pred[:, :3], rgba_pred[:, 3:]
 
@@ -2055,7 +2380,9 @@ class NHAOptimizer(pl.LightningModule):
             return rgb_pred
 
     @torch.no_grad()
-    def predict_shaded_mesh(self, batch, tex_color=np.array((188, 204, 245)) / 255, light_colors=(0.4, 0.6, 0.3)):
+    def predict_shaded_mesh(
+        self, batch, tex_color=np.array((188, 204, 245)) / 255, light_colors=(0.4, 0.6, 0.3)
+    ):
         K = batch["cam_intrinsic"]
         RT = batch["cam_extrinsic"]
         H, W = batch["rgb"].shape[-2:]
@@ -2063,7 +2390,9 @@ class NHAOptimizer(pl.LightningModule):
         flame_params_offsets = self._create_flame_param_batch(batch)
         offsets_verts, _ = self._forward_flame(flame_params_offsets)
 
-        vertex_colors = torch.ones_like(offsets_verts) * torch.tensor(tex_color, device=self.device).float().view(1, 3)
+        vertex_colors = torch.ones_like(offsets_verts) * torch.tensor(
+            tex_color, device=self.device
+        ).float().view(1, 3)
         # define meshes and textures
         tex = TexturesVertex(vertex_colors)
         mesh = Meshes(
@@ -2074,14 +2403,18 @@ class NHAOptimizer(pl.LightningModule):
 
         return render_shaded_mesh(mesh, K, RT, (H, W), self.device, light_colors)
 
-    def render_guidance_mesh(self, batch, tex_color=np.array((188, 204, 245)) / 255, light_colors=(0.4, 0.6, 0.3)):
+    def render_guidance_mesh(
+        self, batch, tex_color=np.array((188, 204, 245)) / 255, light_colors=(0.4, 0.6, 0.3)
+    ):
         K = batch["cam_intrinsic"]
         RT = batch["cam_extrinsic"]
         H, W = batch["rgb"].shape[-2:]
 
         # define meshes and textures
         mesh = self._guidance_meshes.extend(len(batch["rgb"])).to(self.device)
-        vertex_colors = torch.ones_like(mesh.verts_padded()) * torch.tensor(tex_color, device=self.device).float().view(1, 3)
+        vertex_colors = torch.ones_like(mesh.verts_padded()) * torch.tensor(
+            tex_color, device=self.device
+        ).float().view(1, 3)
         tex = TexturesVertex(vertex_colors)
         mesh.textures = tex
 
@@ -2112,8 +2445,8 @@ class NHAOptimizer(pl.LightningModule):
             w_silh=self._decays["silh"].get(epoch),
             w_lap=self._decays["lap"].get(epoch),
             w_surface_reg=self.hparams["w_surface_reg"][i],
-            w_chamfer=self.hparams['w_chamfer'][i],
-            w_panohead_depth=self.hparams['w_panohead_depth'][i],
+            w_chamfer=self.hparams["w_chamfer"][i],
+            w_panohead_depth=self.hparams["w_panohead_depth"][i],
             w_lmk=self.hparams["w_lmk"][i],
             w_shape_reg=self.hparams["w_shape_reg"][i],
             w_expr_reg=self.hparams["w_expr_reg"][i],
@@ -2126,9 +2459,15 @@ class NHAOptimizer(pl.LightningModule):
         )
 
     def configure_optimizers(self):
-
         # FLAME
-        flame_params = [self._shape, self._expr, self._rotation, self._jaw_pose, self._neck_pose, self._log_scale_resid]
+        flame_params = [
+            self._shape,
+            self._expr,
+            self._rotation,
+            self._jaw_pose,
+            self._neck_pose,
+            self._log_scale_resid,
+        ]
 
         lrs = self.get_current_lrs_n_lossweights()
 
@@ -2151,7 +2490,9 @@ class NHAOptimizer(pl.LightningModule):
         ]
         if self.use_normals:
             params[0]["params"] += list(self._normal_encoder.parameters())
-        tex_optim = torch.optim.Adam(params, lr=lrs["tex_lr"], weight_decay=lrs["texture_weight_decay"])
+        tex_optim = torch.optim.Adam(
+            params, lr=lrs["tex_lr"], weight_decay=lrs["texture_weight_decay"]
+        )
 
         # JOINT FLAME
         joint_flame_params = flame_params + [self._eyes_pose]
