@@ -38,9 +38,10 @@ import torch.nn as nn
 import numpy as np
 import pickle
 import torch.nn.functional as F
+from pathlib import Path
 
 logger = get_logger(__name__)
-ASSETS = os.path.join(os.path.abspath("."), 'assets')
+ASSETS = str(Path(__file__).parent.parent.parent / "assets")
 FLAME_ASSETS = os.path.join(ASSETS, 'flame')
 FLAME_MODEL_PATH = os.path.join(FLAME_ASSETS, 'generic_model.pkl')
 FLAME_MESH_MOUTH_PATH = os.path.join(FLAME_ASSETS, 'head_template_mesh_mouth.obj')
